@@ -6,10 +6,6 @@ interface User {
   id: string;
   email: string;
   name: string;
-  bottleCapacity: number; // in ml
-  dailyGoal: number; // in ml
-  unit: 'ml' | 'oz';
-  notifications: boolean;
 }
 
 interface AuthContextType {
@@ -18,7 +14,6 @@ interface AuthContextType {
   isLoading: boolean;
   login: (credentials: { email: string; password: string; name?: string }) => Promise<void>;
   logout: () => Promise<void>;
-  updateUser: (updates: Partial<User>) => Promise<void>;
 }
 
 export const [AuthProvider, useAuth] = createContextHook<AuthContextType>(() => {
@@ -33,18 +28,7 @@ export const [AuthProvider, useAuth] = createContextHook<AuthContextType>(() => 
     try {
       const userData = await AsyncStorage.getItem("user");
       if (userData) {
-        const parsedUser = JSON.parse(userData);
-        // Ensure all required fields are present with defaults
-        const fullUser: User = {
-          id: parsedUser.id,
-          email: parsedUser.email,
-          name: parsedUser.name,
-          bottleCapacity: parsedUser.bottleCapacity || 1000,
-          dailyGoal: parsedUser.dailyGoal || 2500,
-          unit: parsedUser.unit || 'ml',
-          notifications: parsedUser.notifications !== undefined ? parsedUser.notifications : true,
-        };
-        setUser(fullUser);
+        setUser(JSON.parse(userData));
       }
     } catch (error) {
       console.error("Error loading user:", error);
@@ -67,10 +51,6 @@ export const [AuthProvider, useAuth] = createContextHook<AuthContextType>(() => 
         id: Date.now().toString(),
         email: credentials.email,
         name: credentials.name || credentials.email.split("@")[0],
-        bottleCapacity: 1000, // Default 1L
-        dailyGoal: 2500, // Default 2.5L daily goal
-        unit: 'ml',
-        notifications: true,
       };
 
       await AsyncStorage.setItem("user", JSON.stringify(newUser));
@@ -80,19 +60,6 @@ export const [AuthProvider, useAuth] = createContextHook<AuthContextType>(() => 
       throw error;
     } finally {
       setIsLoading(false);
-    }
-  };
-
-  const updateUser = async (updates: Partial<User>) => {
-    if (!user) return;
-    
-    try {
-      const updatedUser = { ...user, ...updates };
-      await AsyncStorage.setItem("user", JSON.stringify(updatedUser));
-      setUser(updatedUser);
-    } catch (error) {
-      console.error("Error updating user:", error);
-      throw error;
     }
   };
 
@@ -111,6 +78,5 @@ export const [AuthProvider, useAuth] = createContextHook<AuthContextType>(() => 
     isLoading,
     login,
     logout,
-    updateUser,
   };
 });

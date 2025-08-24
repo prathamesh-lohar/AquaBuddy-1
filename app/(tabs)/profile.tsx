@@ -19,26 +19,17 @@ import {
   Target, 
   Download, 
   Palette,
-  ChevronRight,
-  Coffee
+  ChevronRight 
 } from 'lucide-react-native';
 
-import { useAuth } from '../../providers/auth-provider';
+import { useWaterTracking } from '../../hooks/useWaterTracking';
 import { Colors, Typography, BorderRadius, Shadow, Spacing } from '../../constants/theme';
 
-// Bottle capacity options
-const BOTTLE_SIZES = [
-  { label: '500ml', value: 500 },
-  { label: '1L', value: 1000 },
-  { label: '2L', value: 2000 },
-  { label: '2.5L', value: 2500 },
-];
-
 export default function ProfileScreen() {
-  const { user, updateUser } = useAuth();
+  const { userProfile, updateUserProfile, currentTotal, streakCount } = useWaterTracking();
   const [isEditing, setIsEditing] = useState(false);
-  const [tempName, setTempName] = useState(user?.name || '');
-  const [tempGoal, setTempGoal] = useState(user?.dailyGoal?.toString() || '2500');
+  const [tempName, setTempName] = useState(userProfile?.name || '');
+  const [tempGoal, setTempGoal] = useState(userProfile?.dailyGoal?.toString() || '3000');
 
   const handleSaveProfile = async () => {
     if (!tempName.trim()) {
@@ -52,39 +43,31 @@ export default function ProfileScreen() {
       return;
     }
 
-    try {
-      await updateUser({
-        name: tempName.trim(),
-        dailyGoal: goal,
-      });
+    const success = await updateUserProfile({
+      name: tempName.trim(),
+      dailyGoal: goal,
+    });
+
+    if (success) {
       setIsEditing(false);
       Alert.alert('Success', 'Profile updated successfully');
-    } catch (error) {
+    } else {
       Alert.alert('Error', 'Failed to update profile');
     }
   };
 
   const handleCancelEdit = () => {
-    setTempName(user?.name || '');
-    setTempGoal(user?.dailyGoal?.toString() || '2500');
+    setTempName(userProfile?.name || '');
+    setTempGoal(userProfile?.dailyGoal?.toString() || '3000');
     setIsEditing(false);
   };
 
-  const handleBottleCapacityChange = async (capacity: number) => {
-    try {
-      await updateUser({ bottleCapacity: capacity });
-      Alert.alert('Success', `Bottle capacity updated to ${capacity}ml`);
-    } catch (error) {
-      Alert.alert('Error', 'Failed to update bottle capacity');
-    }
-  };
-
   const handleNotificationToggle = async (enabled: boolean) => {
-    await updateUser({ notifications: enabled });
+    await updateUserProfile({ notifications: enabled });
   };
 
   const handleUnitToggle = async (unit: 'ml' | 'oz') => {
-    await updateUser({ unit });
+    await updateUserProfile({ unit });
   };
 
   const handleExportData = () => {
@@ -107,7 +90,7 @@ export default function ProfileScreen() {
       .slice(0, 2);
   };
 
-  if (!user) {
+  if (!userProfile) {
     return (
       <View style={[styles.container, styles.centerContent]}>
         <Text style={styles.loadingText}>Loading profile...</Text>
@@ -138,7 +121,7 @@ export default function ProfileScreen() {
             <View style={styles.avatarContainer}>
               <View style={styles.avatar}>
                 <Text style={styles.avatarText}>
-                  {getInitials(user.name)}
+                  {getInitials(userProfile.name)}
                 </Text>
               </View>
             </View>
@@ -180,10 +163,10 @@ export default function ProfileScreen() {
               </View>
             ) : (
               <View style={styles.profileInfo}>
-                <Text style={styles.profileName}>{user.name}</Text>
-                <Text style={styles.profileEmail}>{user.email}</Text>
+                <Text style={styles.profileName}>{userProfile.name}</Text>
+                <Text style={styles.profileEmail}>{userProfile.email}</Text>
                 <Text style={styles.profileGoal}>
-                  Daily Goal: {user.dailyGoal}ml
+                  Daily Goal: {userProfile.dailyGoal}ml
                 </Text>
                 <TouchableOpacity
                   style={styles.editButton}
@@ -195,47 +178,27 @@ export default function ProfileScreen() {
             )}
           </View>
 
-          {/* Bottle Capacity Selection */}
-          <View style={styles.settingsContainer}>
-            <Text style={styles.sectionTitle}>Bottle Settings</Text>
-            
-            <View style={styles.settingItemFull}>
-              <View style={styles.settingLeft}>
-                <Coffee size={20} color={Colors.primary} strokeWidth={2} />
-                <Text style={styles.settingLabel}>Select Your Bottle Capacity</Text>
-              </View>
+          {/* Stats */}
+          <View style={styles.statsContainer}>
+            <View style={styles.statCard}>
+              <Text style={styles.statValue}>{Math.round(currentTotal / 1000 * 10) / 10}L</Text>
+              <Text style={styles.statLabel}>Today</Text>
             </View>
-            
-            <View style={styles.bottleSizeContainer}>
-              {BOTTLE_SIZES.map((bottle) => (
-                <TouchableOpacity
-                  key={bottle.value}
-                  style={[
-                    styles.bottleSizeButton,
-                    user.bottleCapacity === bottle.value && styles.selectedBottleSizeButton
-                  ]}
-                  onPress={() => handleBottleCapacityChange(bottle.value)}
-                >
-                  <Text style={[
-                    styles.bottleSizeButtonText,
-                    user.bottleCapacity === bottle.value && styles.selectedBottleSizeButtonText
-                  ]}>
-                    {bottle.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+            <View style={styles.statCard}>
+              <Text style={styles.statValue}>{streakCount}</Text>
+              <Text style={styles.statLabel}>Day Streak</Text>
             </View>
-            
-            <View style={styles.currentBottleInfo}>
-              <Text style={styles.currentBottleText}>
-                Current Bottle: {user.bottleCapacity}ml
+            <View style={styles.statCard}>
+              <Text style={styles.statValue}>
+                {Math.round((currentTotal / userProfile.dailyGoal) * 100)}%
               </Text>
+              <Text style={styles.statLabel}>Goal Progress</Text>
             </View>
           </View>
 
           {/* Settings */}
           <View style={styles.settingsContainer}>
-            <Text style={styles.sectionTitle}>Preferences</Text>
+            <Text style={styles.sectionTitle}>Settings</Text>
             
             {/* Notifications */}
             <View style={styles.settingItem}>
@@ -244,7 +207,7 @@ export default function ProfileScreen() {
                 <Text style={styles.settingLabel}>Notifications</Text>
               </View>
               <Switch
-                value={user.notifications}
+                value={userProfile.notifications}
                 onValueChange={handleNotificationToggle}
                 trackColor={{ false: Colors.background.light, true: Colors.primary }}
                 thumbColor={Colors.background.white}
@@ -261,25 +224,25 @@ export default function ProfileScreen() {
                 <TouchableOpacity
                   style={[
                     styles.unitButton,
-                    user.unit === 'ml' && styles.activeUnitButton,
+                    userProfile.unit === 'ml' && styles.activeUnitButton,
                   ]}
                   onPress={() => handleUnitToggle('ml')}
                 >
                   <Text style={[
                     styles.unitButtonText,
-                    user.unit === 'ml' && styles.activeUnitButtonText,
+                    userProfile.unit === 'ml' && styles.activeUnitButtonText,
                   ]}>ml</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[
                     styles.unitButton,
-                    user.unit === 'oz' && styles.activeUnitButton,
+                    userProfile.unit === 'oz' && styles.activeUnitButton,
                   ]}
                   onPress={() => handleUnitToggle('oz')}
                 >
                   <Text style={[
                     styles.unitButtonText,
-                    user.unit === 'oz' && styles.activeUnitButtonText,
+                    userProfile.unit === 'oz' && styles.activeUnitButtonText,
                   ]}>oz</Text>
                 </TouchableOpacity>
               </View>
@@ -496,11 +459,6 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: Colors.background.light,
   },
-  settingItemFull: {
-    paddingVertical: Spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: Colors.background.light,
-  },
   settingLeft: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -510,49 +468,6 @@ const styles = StyleSheet.create({
     ...Typography.body,
     color: Colors.text.dark,
     marginLeft: Spacing.md,
-  },
-  bottleSizeContainer: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-    paddingVertical: Spacing.md,
-    gap: Spacing.sm,
-  },
-  bottleSizeButton: {
-    flex: 1,
-    minWidth: '22%',
-    paddingVertical: Spacing.md,
-    paddingHorizontal: Spacing.sm,
-    borderRadius: BorderRadius.medium,
-    borderWidth: 2,
-    borderColor: Colors.primary,
-    backgroundColor: 'transparent',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  selectedBottleSizeButton: {
-    backgroundColor: Colors.primary,
-  },
-  bottleSizeButtonText: {
-    ...Typography.body,
-    color: Colors.primary,
-    fontWeight: '600',
-    fontSize: 14,
-  },
-  selectedBottleSizeButtonText: {
-    color: Colors.background.white,
-  },
-  currentBottleInfo: {
-    backgroundColor: 'rgba(0, 201, 255, 0.1)',
-    borderRadius: BorderRadius.small,
-    padding: Spacing.md,
-    alignItems: 'center',
-    marginTop: Spacing.sm,
-  },
-  currentBottleText: {
-    ...Typography.body,
-    color: Colors.primary,
-    fontWeight: '600',
   },
   unitToggle: {
     flexDirection: 'row',
