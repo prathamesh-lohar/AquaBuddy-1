@@ -299,8 +299,11 @@ export class BluetoothWaterService {
           resolve(false);
         }, 30000); // 30 seconds timeout
 
+        // Enhanced scanning - try both service UUID and name-based discovery
+        console.log('Starting enhanced BLE scan...');
+        
         this.manager.startDeviceScan(
-          [SERVICE_UUID],
+          null, // Scan for all devices first
           { allowDuplicates: false },
           async (error, device) => {
             try {
@@ -318,14 +321,32 @@ export class BluetoothWaterService {
                 return;
               }
 
-              if (device && (device.name === DEVICE_NAME || device.localName === DEVICE_NAME)) {
-                console.log('Found Smart Water Bottle:', device.id);
-                clearTimeout(scanTimeout);
-                this.manager?.stopDeviceScan();
+              if (device) {
+                console.log(`Found device: ${device.name || 'Unknown'} (${device.id})`);
+                
+                // Check multiple ways to identify our device
+                const isOurDevice = 
+                  device.name === DEVICE_NAME ||
+                  device.localName === DEVICE_NAME ||
+                  (device.serviceUUIDs && device.serviceUUIDs.includes(SERVICE_UUID)) ||
+                  (device.name && device.name.toLowerCase().includes('water')) ||
+                  (device.name && device.name.toLowerCase().includes('smart'));
 
-                const connected = await this.connectToDevice(device);
-                this.isConnecting = false;
-                resolve(connected);
+                if (isOurDevice) {
+                  console.log('Found Smart Water Bottle:', {
+                    name: device.name,
+                    localName: device.localName,
+                    id: device.id,
+                    serviceUUIDs: device.serviceUUIDs
+                  });
+                  
+                  clearTimeout(scanTimeout);
+                  this.manager?.stopDeviceScan();
+
+                  const connected = await this.connectToDevice(device);
+                  this.isConnecting = false;
+                  resolve(connected);
+                }
               }
             } catch (scanError) {
               console.error('Error in scan callback:', scanError);
@@ -348,36 +369,7 @@ export class BluetoothWaterService {
       return false;
     }
   }
-              this.isConnecting = false;
-              resolve(false);
-              return;
-            }
-
-            if (device && (device.name === DEVICE_NAME || device.localName === DEVICE_NAME)) {
-              console.log('Found Smart Water Bottle:', device.name);
-              this.manager?.stopDeviceScan();
-              
-              const connected = await this.connectToDevice(device);
-              this.isConnecting = false;
-              resolve(connected);
-            }
-          }
-        );
-
-        // Timeout after 30 seconds
-        setTimeout(() => {
-          this.manager?.stopDeviceScan();
-          this.isConnecting = false;
-          console.log('Scan timeout');
-          resolve(false);
-        }, 30000);
-      });
-    } catch (error) {
-      console.error('Error during scan:', error);
-      this.isConnecting = false;
-      return false;
-    }
-  }
+            
 
   private async connectToDevice(device: Device): Promise<boolean> {
     try {
@@ -434,6 +426,7 @@ export class BluetoothWaterService {
     if (!this.characteristic) return;
 
     try {
+      console.log('Starting data monitoring...');
       await this.characteristic.monitor((error, characteristic) => {
         if (error) {
           console.error('Monitoring error:', error);
@@ -441,21 +434,63 @@ export class BluetoothWaterService {
         }
 
         if (characteristic && characteristic.value) {
-          const data = Buffer.from(characteristic.value, 'base64').toString();
-          const distance = parseInt(data);
-          
-          if (!isNaN(distance)) {
-            const waterLevel = this.convertDistanceToWaterLevel(distance);
+          try {
+            const data = Buffer.from(characteristic.value, 'base64').toString();
+            console.log('Raw data received:', data);
             
-            const waterData: WaterLevelData = {
-              distance,
-              waterLevel,
-              timestamp: Date.now()
-            };
+            // Try to parse as JSON first (new ESP32 format)
+            try {
+              const jsonData = JSON.parse(data);
+              if (jsonData.distance !== undefined) {
+                const distance = parseInt(jsonData.distance);
+                const timestamp = jsonData.timestamp ? parseInt(jsonData.timestamp) : Date.now();
+                
+                if (!isNaN(distance)) {
+                  const waterLevel = this.convertDistanceToWaterLevel(distance);
+                  
+                  const waterData: WaterLevelData = {
+                    distance,
+                    waterLevel,
+                    timestamp: timestamp
+                  };
 
-            console.log(`Distance: ${distance}mm, Water Level: ${(waterLevel * 100).toFixed(1)}%`);
-            this.notifyListeners(waterData);
+                  console.log(`JSON Data - Distance: ${distance}mm, Water Level: ${(waterLevel * 100).toFixed(1)}%`);
+                  this.notifyListeners(waterData);
+                }
+                return;
+              }
+            } catch (jsonError) {
+              // Not JSON, try parsing as plain number (legacy format)
+              console.log('Not JSON, trying plain number format');
+            }
+            
+            // Fallback: try parsing as plain distance value
+            const distance = parseInt(data.trim());
+            if (!isNaN(distance)) {
+              const waterLevel = this.convertDistanceToWaterLevel(distance);
+              
+              const waterData: WaterLevelData = {
+                distance,
+                waterLevel,
+                timestamp: Date.now()
+              };
+
+              console.log(`Plain Data - Distance: ${distance}mm, Water Level: ${(waterLevel * 100).toFixed(1)}%`);
+              this.notifyListeners(waterData);
+            } else {
+              console.warn('Could not parse distance data:', data);
+            }
+          } catch (parseError) {
+            console.error('Error parsing received data:', parseError);
           }
+        }
+      });
+      
+      console.log('Data monitoring started successfully');
+    } catch (error) {
+      console.error('Error starting monitoring:', error);
+    }
+  }
         }
       });
     } catch (error) {
