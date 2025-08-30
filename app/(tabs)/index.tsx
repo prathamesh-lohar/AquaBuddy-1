@@ -13,7 +13,9 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
 
+
 import { useAuth } from '../../providers/auth-provider';
+import { useBluetoothWater } from '../../hooks/useBluetoothWater';
 import { WaterBottle } from '../../components/WaterBottle';
 import { ProgressBar } from '../../components/ProgressBar';
 import { StatCard } from '../../components/StatCard';
@@ -33,83 +35,154 @@ const BOTTLE_SIZES = [
 export default function HomeScreen() {
   const { user } = useAuth();
   
-  // IoT Bottle State - Use bottle capacity from user settings
+  // Bluetooth IoT Integration with fallback
+  const {
+    isConnected,
+    isConnecting,
+    connectionError,
+    currentWaterLevel: bluetoothWaterLevel,
+    currentDistance,
+    lastUpdateTime,
+    isDataFresh,
+    connectToDevice,
+    disconnectDevice,
+  } = useBluetoothWater();
+  
+  // Fallback simulation when Bluetooth is not connected
+  const [simulatedWaterLevel, setSimulatedWaterLevel] = useState(0.9);
+  
+  // Use Bluetooth data if available, otherwise use simulation
+  const currentWaterLevel = isConnected ? bluetoothWaterLevel : simulatedWaterLevel;
+  
+  // App State
   const selectedBottleSize = user?.bottleCapacity || 1000;
-  const [currentWaterLevel, setCurrentWaterLevel] = useState(0.9); // Start at 90%
-  const [lastWaterLevelChange, setLastWaterLevelChange] = useState(Date.now());
-  const [isConnected, setIsConnected] = useState(true); // IoT device connection status
   const [dailyWaterConsumed, setDailyWaterConsumed] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [currentTip, setCurrentTip] = useState(getMotivationalTip());
+  const [previousWaterLevel, setPreviousWaterLevel] = useState(currentWaterLevel);
 
-  // IoT Simulation - Decrease water level randomly to simulate drinking
+  // Fallback simulation when not connected to Bluetooth
   useEffect(() => {
+    if (isConnected) return; // Skip simulation if Bluetooth is connected
+
     const simulateWaterConsumption = setInterval(() => {
-      // Random chance of water consumption (20% every 30 seconds)
-      if (Math.random() < 0.2 && currentWaterLevel > 0.05) {
-        const consumptionAmount = 0.05 + Math.random() * 0.1; // 5-15% of bottle
-        const newLevel = Math.max(0, currentWaterLevel - consumptionAmount);
-        const mlConsumed = (currentWaterLevel - newLevel) * selectedBottleSize;
-        
-        setCurrentWaterLevel(newLevel);
-        setDailyWaterConsumed(prev => prev + mlConsumed);
-        setLastWaterLevelChange(Date.now());
-        
-        console.log(`IoT: User drank ${Math.round(mlConsumed)}ml`);
+      if (Math.random() < 0.15 && simulatedWaterLevel > 0.05) { // 15% chance every 45 seconds
+        const consumptionAmount = 0.03 + Math.random() * 0.07; // 3-10% of bottle
+        const newLevel = Math.max(0, simulatedWaterLevel - consumptionAmount);
+        setSimulatedWaterLevel(newLevel);
+        console.log(`Simulation: Water level decreased to ${(newLevel * 100).toFixed(1)}%`);
       }
-    }, 30000); // Check every 30 seconds
+    }, 45000); // Check every 45 seconds
 
     return () => clearInterval(simulateWaterConsumption);
-  }, [currentWaterLevel, selectedBottleSize]);
+  }, [isConnected, simulatedWaterLevel]);
 
-  // Check for inactivity notifications
+  // Track water consumption when level decreases
   useEffect(() => {
+    if (currentWaterLevel < previousWaterLevel && previousWaterLevel > 0) {
+      const consumption = (previousWaterLevel - currentWaterLevel) * selectedBottleSize;
+      setDailyWaterConsumed(prev => prev + consumption);
+      console.log(`Real IoT: User consumed ${Math.round(consumption)}ml`);
+    }
+    setPreviousWaterLevel(currentWaterLevel);
+  }, [currentWaterLevel, selectedBottleSize, previousWaterLevel]);
+
+  // Check for inactivity notifications (only when connected)
+  useEffect(() => {
+    if (!isConnected || !isDataFresh) return;
+
     const checkInactivity = setInterval(() => {
-      const timeSinceLastChange = Date.now() - lastWaterLevelChange;
-      const hoursSinceLastDrink = timeSinceLastChange / (1000 * 60 * 60);
+      const timeSinceLastUpdate = Date.now() - lastUpdateTime;
+      const hoursSinceLastUpdate = timeSinceLastUpdate / (1000 * 60 * 60);
       
-      // Notify if no water consumed for 2+ hours
-      if (hoursSinceLastDrink >= 2) {
+      // Notify if no data received for 2+ hours
+      if (hoursSinceLastUpdate >= 2) {
         Alert.alert(
           "Hydration Reminder! 💧",
-          "Your water bottle hasn't moved in 2 hours. Time to drink some water!",
+          "No water level changes detected in 2 hours. Time to stay hydrated!",
           [{ text: "OK", style: "default" }]
         );
-        setLastWaterLevelChange(Date.now()); // Reset timer to avoid spam
       }
     }, 60000); // Check every minute
 
     return () => clearInterval(checkInactivity);
-  }, [lastWaterLevelChange]);
+  }, [isConnected, lastUpdateTime, isDataFresh]);
 
-  // Reset bottle when empty
+  // Alert for empty bottle (when connected)
   useEffect(() => {
-    if (currentWaterLevel <= 0.05) {
+    if (isConnected && currentWaterLevel <= 0.05) {
       Alert.alert(
         "Bottle Empty! 🚰",
-        "Your bottle is almost empty. Please refill it to continue tracking.",
+        "Your smart bottle is almost empty. Please refill it to continue tracking.",
         [
           {
-            text: "Refilled",
-            onPress: () => {
-              setCurrentWaterLevel(0.9); // Refill to 90%
-              setLastWaterLevelChange(Date.now());
-            }
+            text: "OK",
+            style: "default"
           }
         ]
       );
     }
-  }, [currentWaterLevel]);
+  }, [currentWaterLevel, isConnected]);
 
   const onRefresh = async () => {
     setRefreshing(true);
     setCurrentTip(getMotivationalTip());
-    // Simulate IoT device reconnection
-    setIsConnected(false);
+    
+    // Try to reconnect Bluetooth if not connected
+    if (!isConnected && !isConnecting) {
+      await connectToDevice();
+    }
+    
     setTimeout(() => {
-      setIsConnected(true);
       setRefreshing(false);
     }, 1000);
+  };
+
+  const handleBluetoothConnect = async () => {
+    if (isConnecting) {
+      console.log('Already connecting, ignoring button press');
+      return;
+    }
+    
+    try {
+      console.log('User clicked connect button');
+      
+      // Show loading state immediately
+      const success = await connectToDevice();
+      
+      if (success) {
+        Alert.alert(
+          'Success!',
+          'Connected to Smart Water Bottle successfully!',
+          [{ text: 'OK' }]
+        );
+      } else {
+        // Error message is handled by the hook
+        console.log('Connection failed - error shown by hook');
+      }
+    } catch (error) {
+      console.error('Error in handleBluetoothConnect:', error);
+      Alert.alert(
+        'Connection Error',
+        'Something went wrong while connecting. Please try again.',
+        [{ text: 'OK' }]
+      );
+    }
+  };
+
+  const handleBluetoothDisconnect = async () => {
+    try {
+      console.log('User clicked disconnect button');
+      await disconnectDevice();
+      Alert.alert(
+        'Disconnected',
+        'Disconnected from Smart Water Bottle',
+        [{ text: 'OK' }]
+      );
+    } catch (error) {
+      console.error('Error in handleBluetoothDisconnect:', error);
+      // Continue anyway, just log the error
+    }
   };
 
   const getGreeting = () => {
@@ -213,19 +286,55 @@ export default function HomeScreen() {
             </Text>
           </View>
 
-          {/* IoT Device Info */}
+          {/* IoT Device Info & Controls */}
           <View style={styles.iotInfoContainer}>
             <Text style={styles.sectionTitle}>Smart Bottle Status</Text>
-            <View style={styles.iotInfo}>
+            <View style={[styles.iotInfo, { borderLeftColor: isConnected ? '#4CAF50' : '#F44336' }]}>
               <Text style={styles.iotInfoText}>
-                📱 Device automatically detects water consumption
+                📱 Status: {isConnected ? 'Connected' : 'Disconnected'}
               </Text>
-              <Text style={styles.iotInfoText}>
-                ⏰ Last activity: {new Date(lastWaterLevelChange).toLocaleTimeString()}
-              </Text>
-              <Text style={styles.iotInfoText}>
-                🔋 Battery: 85% (7 days remaining)
-              </Text>
+              {isConnected && (
+                <>
+                  <Text style={styles.iotInfoText}>
+                    📏 Distance: {currentDistance}mm
+                  </Text>
+                  <Text style={styles.iotInfoText}>
+                    ⏰ Last update: {lastUpdateTime ? new Date(lastUpdateTime).toLocaleTimeString() : 'No data'}
+                  </Text>
+                  <Text style={styles.iotInfoText}>
+                    � Data: {isDataFresh ? 'Fresh' : 'Stale'}
+                  </Text>
+                </>
+              )}
+              {connectionError && (
+                <Text style={[styles.iotInfoText, { color: '#F44336' }]}>
+                  ❌ Error: {connectionError}
+                </Text>
+              )}
+            </View>
+            
+            {/* Bluetooth Control Buttons */}
+            <View style={styles.bluetoothControls}>
+              {!isConnected ? (
+                <TouchableOpacity
+                  style={[styles.bluetoothButton, styles.connectButton]}
+                  onPress={handleBluetoothConnect}
+                  disabled={isConnecting}
+                >
+                  <Text style={styles.bluetoothButtonText}>
+                    {isConnecting ? '🔄 Connecting...' : '📶 Connect to Bottle'}
+                  </Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity
+                  style={[styles.bluetoothButton, styles.disconnectButton]}
+                  onPress={handleBluetoothDisconnect}
+                >
+                  <Text style={styles.bluetoothButtonText}>
+                    🔌 Disconnect
+                  </Text>
+                </TouchableOpacity>
+              )}
             </View>
           </View>
 
@@ -400,6 +509,33 @@ const styles = StyleSheet.create({
     color: Colors.primary,
     fontStyle: 'italic',
     textAlign: 'center',
+  },
+  bluetoothControls: {
+    marginTop: Spacing.md,
+    alignItems: 'center',
+  },
+  bluetoothButton: {
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.sm,
+    borderRadius: 20,
+    minWidth: 200,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  connectButton: {
+    backgroundColor: '#4CAF50',
+  },
+  disconnectButton: {
+    backgroundColor: '#F44336',
+  },
+  bluetoothButtonText: {
+    ...Typography.body,
+    color: 'white',
+    fontWeight: '600',
   },
   bottomSpacing: {
     height: Spacing.xxl,

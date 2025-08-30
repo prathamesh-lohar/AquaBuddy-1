@@ -6,6 +6,8 @@ interface User {
   id: string;
   email: string;
   name: string;
+  bottleCapacity?: number;
+  dailyGoal?: number;
 }
 
 interface AuthContextType {
@@ -14,6 +16,7 @@ interface AuthContextType {
   isLoading: boolean;
   login: (credentials: { email: string; password: string; name?: string }) => Promise<void>;
   logout: () => Promise<void>;
+  updateProfile: (updates: Partial<User>) => Promise<void>;
 }
 
 export const [AuthProvider, useAuth] = createContextHook<AuthContextType>(() => {
@@ -51,6 +54,8 @@ export const [AuthProvider, useAuth] = createContextHook<AuthContextType>(() => 
         id: Date.now().toString(),
         email: credentials.email,
         name: credentials.name || credentials.email.split("@")[0],
+        bottleCapacity: 1000, // Default 1L bottle
+        dailyGoal: 2500, // Default 2.5L daily goal
       };
 
       await AsyncStorage.setItem("user", JSON.stringify(newUser));
@@ -72,11 +77,25 @@ export const [AuthProvider, useAuth] = createContextHook<AuthContextType>(() => 
     }
   };
 
+  const updateProfile = async (updates: Partial<User>) => {
+    if (!user) return;
+    
+    try {
+      const updatedUser: User = { ...user, ...updates };
+      await AsyncStorage.setItem("user", JSON.stringify(updatedUser));
+      setUser(updatedUser);
+    } catch (error) {
+      console.error("Profile update error:", error);
+      throw error;
+    }
+  };
+
   return {
     user,
     isAuthenticated: !!user,
     isLoading,
     login,
     logout,
+    updateProfile,
   };
 });
