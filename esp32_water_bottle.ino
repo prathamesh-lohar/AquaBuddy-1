@@ -1,177 +1,146 @@
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
-#include <BLE2902.h>
+#include <Arduino.h>
 #include <Wire.h>
-#include <VL53L0X.h>
+#include <Adafruit_VL53L0X.h>
+#include <BLEDevice.h>
+#include <BLEUtils.h>
+#include <BLEServer.h>
+#include <BLE2902.h>  // CRITICAL: This was missing!
 
-// BLE Service and Characteristic UUIDs (must match React Native app)
-#define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+// BLE UUIDs (must match React Native exactly)
+#define SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 
-// VL53L0X sensor
-VL53L0X sensor;
-
-// BLE variables
-BLEServer* pServer = NULL;
-BLECharacteristic* pCharacteristic = NULL;
-bool deviceConnected = false;
-bool oldDeviceConnected = false;
-
-// Device name (must match React Native app)
-String deviceName = "SmartWaterBottle";
-
-// I2C pins for VL53L0X
+// Custom I2C pins
 #define SDA_PIN 4
 #define SCL_PIN 5
 
-// LED pin for status indication
-#define LED_PIN 2
+Adafruit_VL53L0X lox = Adafruit_VL53L0X();
+BLECharacteristic *pCharacteristic;
+BLEServer *pServer;
+bool deviceConnected = false;
+bool oldDeviceConnected = false;
 
+// BLE Server callbacks
 class MyServerCallbacks: public BLEServerCallbacks {
-    void onConnect(BLEServer* pServer) {
-      deviceConnected = true;
-      digitalWrite(LED_PIN, HIGH); // LED on when connected
-      Serial.println("Device connected!");
-    };
+  void onConnect(BLEServer* pServer) {
+    deviceConnected = true;
+    Serial.println("✅ Device connected!");
+  }
 
-    void onDisconnect(BLEServer* pServer) {
-      deviceConnected = false;
-      digitalWrite(LED_PIN, LOW); // LED off when disconnected
-      Serial.println("Device disconnected!");
-    }
+  void onDisconnect(BLEServer* pServer) {
+    deviceConnected = false;
+    Serial.println("❌ Device disconnected");
+    // Don't restart advertising here - do it in loop()
+  }
 };
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("Starting Smart Water Bottle...");
-
-  // Initialize LED
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, LOW);
-
+  
   // Initialize I2C with custom pins
   Wire.begin(SDA_PIN, SCL_PIN);
   
-  // Initialize VL53L0X sensor
-  sensor.setTimeout(500);
-  if (!sensor.init()) {
-    Serial.println("Failed to detect and initialize VL53L0X sensor!");
-    // Blink LED to indicate sensor error
-    for(int i = 0; i < 10; i++) {
-      digitalWrite(LED_PIN, HIGH);
-      delay(100);
-      digitalWrite(LED_PIN, LOW);
-      delay(100);
-    }
-    return;
-  }
+  Serial.println("🚀 Starting SmartWaterBottle...");
   
-  // Set sensor to long range mode
-  sensor.setMeasurementTimingBudget(33000);
-  Serial.println("VL53L0X sensor initialized successfully");
-
+  // Initialize VL53L0X sensor
+  if (!lox.begin()) {
+    Serial.println("❌ Failed to boot VL53L0X");
+    Serial.println("Check wiring: SDA=4, SCL=5, VCC=3.3V, GND=GND");
+    while(1) {
+      delay(1000);
+      Serial.println("Sensor error - please check connections");
+    }
+  }
+  Serial.println("✅ VL53L0X sensor initialized");
+  
   // Initialize BLE
-  BLEDevice::init(deviceName.c_str());
-
-  // Create BLE Server
+  BLEDevice::init("SmartWaterBottle");
   pServer = BLEDevice::createServer();
   pServer->setCallbacks(new MyServerCallbacks());
-
+  
   // Create BLE Service
   BLEService *pService = pServer->createService(SERVICE_UUID);
-
-  // Create BLE Characteristic
+  
+  // Create BLE Characteristic with proper properties
   pCharacteristic = pService->createCharacteristic(
-                      CHARACTERISTIC_UUID,
-                      BLECharacteristic::PROPERTY_READ   |
-                      BLECharacteristic::PROPERTY_WRITE  |
-                      BLECharacteristic::PROPERTY_NOTIFY |
-                      BLECharacteristic::PROPERTY_INDICATE
-                    );
-
-  // Add descriptor for notifications
+    CHARACTERISTIC_UUID,
+    BLECharacteristic::PROPERTY_READ |
+    BLECharacteristic::PROPERTY_WRITE |
+    BLECharacteristic::PROPERTY_NOTIFY |
+    BLECharacteristic::PROPERTY_INDICATE
+  );
+  
+  // CRITICAL: Add BLE2902 descriptor for notifications
   pCharacteristic->addDescriptor(new BLE2902());
-
+  
   // Start the service
   pService->start();
-
-  // Start advertising
+  
+  // Configure advertising properly
   BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
   pAdvertising->addServiceUUID(SERVICE_UUID);
   pAdvertising->setScanResponse(false);
-  pAdvertising->setMinPreferred(0x0);  // set value to 0x00 to not advertise this parameter
+  pAdvertising->setMinPreferred(0x0);
   
-  // Enhanced advertising for better discoverability
+  // Enhanced advertising data
   BLEAdvertisementData advertisementData;
-  advertisementData.setName(deviceName);
+  advertisementData.setName("SmartWaterBottle");
   advertisementData.setCompleteServices(BLEUUID(SERVICE_UUID));
-  advertisementData.setShortName("SmartWater");
   pAdvertising->setAdvertisementData(advertisementData);
   
+  // Start advertising
   BLEDevice::startAdvertising();
   
-  Serial.println("Characteristic defined! Now you can connect and read/write/notify it in your phone!");
-  Serial.print("Device name: ");
-  Serial.println(deviceName);
-  Serial.print("Service UUID: ");
-  Serial.println(SERVICE_UUID);
-  Serial.print("Characteristic UUID: ");
-  Serial.println(CHARACTERISTIC_UUID);
-  
-  // Blink LED 3 times to indicate successful initialization
-  for(int i = 0; i < 3; i++) {
-    digitalWrite(LED_PIN, HIGH);
-    delay(500);
-    digitalWrite(LED_PIN, LOW);
-    delay(500);
-  }
+  Serial.println("📡 BLE Advertising started");
+  Serial.println("📱 Device name: SmartWaterBottle");
+  Serial.println("🔑 Service UUID: " + String(SERVICE_UUID));
+  Serial.println("🔑 Characteristic UUID: " + String(CHARACTERISTIC_UUID));
+  Serial.println("🎯 Ready for connections!");
 }
 
 void loop() {
-  // Read distance from VL53L0X sensor
-  uint16_t distance = sensor.readRangeSingleMillimeters();
+  // Read sensor data
+  VL53L0X_RangingMeasurementData_t measure;
+  lox.rangingTest(&measure, false);
   
-  if (sensor.timeoutOccurred()) {
-    Serial.println("VL53L0X TIMEOUT");
-    return;
+  if (measure.RangeStatus != 4) {
+    int distance_mm = measure.RangeMilliMeter;
+    
+    // Create JSON data for better parsing
+    String jsonData = "{\"distance\":" + String(distance_mm) + ",\"timestamp\":" + String(millis()) + "}";
+    
+    Serial.print("📏 Distance: ");
+    Serial.print(distance_mm);
+    Serial.println(" mm");
+    
+    // Send data if connected
+    if (deviceConnected && pCharacteristic) {
+      pCharacteristic->setValue(jsonData.c_str());
+      pCharacteristic->notify();
+      Serial.println("📤 Sent: " + jsonData);
+      
+      // Brief LED flash to indicate data sent
+      digitalWrite(LED_PIN, LOW);
+      delay(50);
+      digitalWrite(LED_PIN, HIGH);
+    }
+  } else {
+    Serial.println("⚠️ Sensor out of range");
   }
-
-  // Print distance for debugging
-  Serial.print("Distance: ");
-  Serial.print(distance);
-  Serial.println(" mm");
-
-  // If device is connected, send data via BLE
-  if (deviceConnected) {
-    // Create JSON string with sensor data
-    String jsonData = "{\"distance\":" + String(distance) + ",\"timestamp\":" + String(millis()) + "}";
-    
-    // Send data via BLE characteristic
-    pCharacteristic->setValue(jsonData.c_str());
-    pCharacteristic->notify();
-    
-    Serial.print("Sent data: ");
-    Serial.println(jsonData);
-    
-    // Blink LED briefly to indicate data transmission
-    digitalWrite(LED_PIN, LOW);
-    delay(50);
-    digitalWrite(LED_PIN, HIGH);
-  }
-
+  
   // Handle disconnection and reconnection
   if (!deviceConnected && oldDeviceConnected) {
-    delay(500); // give the bluetooth stack the chance to get things ready
-    pServer->startAdvertising(); // restart advertising
-    Serial.println("Start advertising");
+    delay(500); // Give bluetooth stack time to get ready
+    pServer->startAdvertising(); // Restart advertising
+    Serial.println("🔄 Restarting advertising...");
     oldDeviceConnected = deviceConnected;
   }
   
   // Handle new connection
   if (deviceConnected && !oldDeviceConnected) {
     oldDeviceConnected = deviceConnected;
+    Serial.println("🎉 New connection established!");
   }
-
-  delay(2000); // Send data every 2 seconds
+  
+  delay(1000); // Send data every 1 second for better responsiveness
 }

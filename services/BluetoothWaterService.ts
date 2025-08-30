@@ -65,38 +65,62 @@ export class BluetoothWaterService {
         return;
       }
 
-      // Initialize BLE manager with error handling
+      // Initialize BLE manager with immediate state checking
       await new Promise<void>((resolve, reject) => {
-        setTimeout(() => {
-          try {
-            this.manager = new BleManager();
-            console.log('BLE Manager created');
+        try {
+          this.manager = new BleManager();
+          console.log('✅ BLE Manager created');
 
-            // Add error handler for manager
-            this.manager.onStateChange((state) => {
-              console.log('Bluetooth state changed to:', state);
-              if (state === 'PoweredOn') {
-                console.log('Bluetooth is ready');
-                this.isInitialized = true;
-                this.initializationError = false;
-              } else {
-                console.log('Bluetooth is not ready:', state);
-                this.isInitialized = false;
-                if (state === 'PoweredOff') {
-                  // Don't show alert during initialization
-                  console.log('Bluetooth is disabled');
+          // Check initial state immediately
+          this.manager.state().then(initialState => {
+            console.log('📱 Initial Bluetooth state:', initialState);
+            if (initialState === 'PoweredOn') {
+              console.log('🎯 Bluetooth is ready immediately');
+              this.isInitialized = true;
+              this.initializationError = false;
+              resolve();
+            } else {
+              console.log('⏳ Waiting for Bluetooth to be ready...');
+              
+              // Set up state change listener
+              this.manager!.onStateChange((state) => {
+                console.log('🔄 Bluetooth state changed to:', state);
+                if (state === 'PoweredOn') {
+                  console.log('✅ Bluetooth is now ready!');
+                  this.isInitialized = true;
+                  this.initializationError = false;
+                  resolve();
+                } else {
+                  console.log('⚠️ Bluetooth is not ready:', state);
+                  this.isInitialized = false;
+                  if (state === 'PoweredOff') {
+                    console.log('❌ Bluetooth is disabled');
+                    this.initializationError = true;
+                    reject(new Error('Bluetooth is disabled'));
+                  }
                 }
-              }
-            }, true);
-
-            console.log('Bluetooth service initialized successfully');
-            resolve();
-          } catch (error) {
-            console.error('Error creating BLE manager:', error);
+              }, true);
+              
+              // Timeout after 10 seconds
+              setTimeout(() => {
+                if (!this.isInitialized) {
+                  console.log('⏰ Bluetooth initialization timeout');
+                  this.initializationError = true;
+                  reject(new Error('Bluetooth initialization timeout'));
+                }
+              }, 10000);
+            }
+          }).catch(error => {
+            console.error('❌ Error checking initial state:', error);
             this.initializationError = true;
             reject(error);
-          }
-        }, 1000);
+          });
+
+        } catch (error) {
+          console.error('❌ Error creating BLE manager:', error);
+          this.initializationError = true;
+          reject(error);
+        }
       });
 
     } catch (error) {
@@ -113,7 +137,7 @@ export class BluetoothWaterService {
         const permissions = [];
         
         // Check Android API level
-        const apiLevel = Platform.constants?.Release || 0;
+        const apiLevel = parseInt(Platform.constants?.Release || '0', 10);
         
         if (apiLevel >= 12) {
           // Android 12+ permissions
@@ -134,7 +158,9 @@ export class BluetoothWaterService {
         let allGranted = true;
         for (const permission of permissions) {
           try {
-            const granted = await PermissionsAndroid.request(permission);
+            const granted = await PermissionsAndroid.request(
+              permission as any // Type assertion for custom permissions
+            );
             if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
               console.log(`Permission denied: ${permission}`);
               allGranted = false;
@@ -491,12 +517,7 @@ export class BluetoothWaterService {
       console.error('Error starting monitoring:', error);
     }
   }
-        }
-      });
-    } catch (error) {
-      console.error('Error starting monitoring:', error);
-    }
-  }
+     
 
   public addDataListener(callback: (data: WaterLevelData) => void) {
     this.listeners.push(callback);
