@@ -23,7 +23,13 @@
         "backgroundColor": "#00C9FF"
       },
       "package": "com.smarthydration.aquabuddy",
-      "versionCode": 1
+      "versionCode": 1,
+      "permissions": [
+        "android.permission.BLUETOOTH",
+        "android.permission.BLUETOOTH_ADMIN",
+        "android.permission.BLUETOOTH_CONNECT",
+        "android.permission.BLUETOOTH_SCAN"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -41,6 +47,15 @@
           "imageWidth": 200,
           "resizeMode": "contain",
           "backgroundColor": "#f8fafc"
+        }
+      ],
+      [
+        "react-native-ble-plx",
+        {
+          "isBackgroundEnabled": true,
+          "modes": ["peripheral", "central"],
+          "bluetoothAlwaysUsageDescription": "This app uses Bluetooth to connect to your Smart Water Bottle and monitor water levels in real-time.",
+          "bluetoothPeripheralUsageDescription": "This app uses Bluetooth to connect to your Smart Water Bottle device."
         }
       ]
     ],
