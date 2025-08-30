@@ -9,6 +9,8 @@ import {
   RefreshControl,
   TouchableOpacity,
   Alert,
+  FlatList,
+  Modal,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
@@ -35,17 +37,25 @@ const BOTTLE_SIZES = [
 export default function HomeScreen() {
   const { user } = useAuth();
   
-  // Bluetooth IoT Integration with fallback
+  // Bluetooth IoT Integration with device selection
   const {
     isConnected,
     isConnecting,
+    isScanning,
+    availableDevices,
+    selectedDevice,
     connectionError,
     currentWaterLevel: bluetoothWaterLevel,
     currentDistance,
     lastUpdateTime,
     isDataFresh,
+    scanForDevices,
+    stopScanning,
+    selectDevice,
     connectToDevice,
     disconnectDevice,
+    getDiagnostics,
+    forceReinitialize,
   } = useBluetoothWater();
   
   // Fallback simulation when Bluetooth is not connected
@@ -138,26 +148,97 @@ export default function HomeScreen() {
     }, 1000);
   };
 
+  const handleDiagnostics = async () => {
+    try {
+      const diagnostics = await getDiagnostics();
+      Alert.alert(
+        'BLE Manager Diagnostics',
+        diagnostics,
+        [
+          { text: 'Copy to Clipboard', onPress: () => console.log(diagnostics) },
+          { text: 'OK' }
+        ]
+      );
+    } catch (error) {
+      Alert.alert('Error', 'Failed to get diagnostics');
+    }
+  };
+
+  const handleForceReinitialize = async () => {
+    Alert.alert(
+      'Force Reinitialize BLE',
+      'This will restart the Bluetooth manager. Continue?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Restart', 
+          onPress: async () => {
+            const success = await forceReinitialize();
+            Alert.alert(
+              success ? 'Success' : 'Failed',
+              success ? 'BLE Manager reinitialized successfully' : 'Failed to reinitialize BLE Manager',
+              [{ text: 'OK' }]
+            );
+          }
+        }
+      ]
+    );
+  };
+
+  const handleScanForDevices = async () => {
+    setShowDeviceSelector(true);
+    try {
+      console.log('Scanning for BLE devices...');
+      const devices = await scanForDevices();
+      console.log('Found', devices.length, 'devices');
+      
+      if (devices.length === 0) {
+        Alert.alert(
+          'No Devices Found',
+          'No Bluetooth devices found nearby. Make sure your water bottle device is powered on and in pairing mode.',
+          [{ text: 'OK' }]
+        );
+      }
+    } catch (error) {
+      console.error('Error scanning for devices:', error);
+      Alert.alert(
+        'Scan Error',
+        'Failed to scan for devices. Please check Bluetooth is enabled and try again.',
+        [{ text: 'OK' }]
+      );
+    }
+  };
+
+  const handleDeviceSelect = (device: any) => {
+    selectDevice(device);
+    console.log('Selected device:', device.name || device.id);
+  };
+
   const handleBluetoothConnect = async () => {
+    if (!selectedDevice) {
+      // No device selected, show device selector
+      await handleScanForDevices();
+      return;
+    }
+
     if (isConnecting) {
       console.log('Already connecting, ignoring button press');
       return;
     }
     
     try {
-      console.log('User clicked connect button');
+      console.log('User clicked connect button for device:', selectedDevice.name);
       
-      // Show loading state immediately
-      const success = await connectToDevice();
+      const success = await connectToDevice(selectedDevice.id);
       
       if (success) {
+        setShowDeviceSelector(false);
         Alert.alert(
           'Success!',
-          'Connected to Smart Water Bottle successfully!',
+          `Connected to ${selectedDevice.name || 'device'} successfully!`,
           [{ text: 'OK' }]
         );
       } else {
-        // Error message is handled by the hook
         console.log('Connection failed - error shown by hook');
       }
     } catch (error) {
@@ -174,14 +255,14 @@ export default function HomeScreen() {
     try {
       console.log('User clicked disconnect button');
       await disconnectDevice();
+      setShowDeviceSelector(false);
       Alert.alert(
         'Disconnected',
-        'Disconnected from Smart Water Bottle',
+        'Disconnected from device',
         [{ text: 'OK' }]
       );
     } catch (error) {
       console.error('Error in handleBluetoothDisconnect:', error);
-      // Continue anyway, just log the error
     }
   };
 
@@ -316,27 +397,163 @@ export default function HomeScreen() {
             {/* Bluetooth Control Buttons */}
             <View style={styles.bluetoothControls}>
               {!isConnected ? (
-                <TouchableOpacity
-                  style={[styles.bluetoothButton, styles.connectButton]}
-                  onPress={handleBluetoothConnect}
-                  disabled={isConnecting}
-                >
-                  <Text style={styles.bluetoothButtonText}>
-                    {isConnecting ? '🔄 Connecting...' : '📶 Connect to Bottle'}
-                  </Text>
-                </TouchableOpacity>
+                <>
+                  {!selectedDevice ? (
+                    <TouchableOpacity
+                      style={[styles.bluetoothButton, styles.scanButton]}
+                      onPress={handleScanForDevices}
+                      disabled={isScanning}
+                    >
+                      <Text style={styles.bluetoothButtonText}>
+                        {isScanning ? '🔍 Scanning...' : '🔍 Scan for Devices'}
+                      </Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <View>
+                      <Text style={styles.selectedDeviceText}>
+                        Selected: {selectedDevice.name || selectedDevice.id}
+                      </Text>
+                      <View style={styles.deviceActions}>
+                        <TouchableOpacity
+                          style={[styles.bluetoothButton, styles.connectButton]}
+                          onPress={handleBluetoothConnect}
+                          disabled={isConnecting}
+                        >
+                          <Text style={styles.bluetoothButtonText}>
+                            {isConnecting ? '🔄 Connecting...' : '📶 Connect'}
+                          </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.bluetoothButton, styles.rescanButton]}
+                          onPress={handleScanForDevices}
+                          disabled={isScanning}
+                        >
+                          <Text style={styles.bluetoothButtonText}>
+                            {isScanning ? '🔍 Scanning...' : '🔄 Rescan'}
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  )}
+                </>
               ) : (
-                <TouchableOpacity
-                  style={[styles.bluetoothButton, styles.disconnectButton]}
-                  onPress={handleBluetoothDisconnect}
-                >
-                  <Text style={styles.bluetoothButtonText}>
-                    🔌 Disconnect
+                <View>
+                  <Text style={styles.connectedDeviceText}>
+                    Connected to: {selectedDevice?.name || 'Unknown Device'}
                   </Text>
-                </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.bluetoothButton, styles.disconnectButton]}
+                    onPress={handleBluetoothDisconnect}
+                  >
+                    <Text style={styles.bluetoothButtonText}>
+                      🔌 Disconnect
+                    </Text>
+                  </TouchableOpacity>
+                </View>
               )}
+              
+              {/* Debug/Diagnostic Buttons */}
+              <View style={styles.diagnosticButtons}>
+                <TouchableOpacity
+                  style={[styles.diagnosticButton, styles.infoButton]}
+                  onPress={handleDiagnostics}
+                >
+                  <Text style={styles.diagnosticButtonText}>🔍 Diagnostics</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.diagnosticButton, styles.warningButton]}
+                  onPress={handleForceReinitialize}
+                >
+                  <Text style={styles.diagnosticButtonText}>🔄 Reset BLE</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
+
+          {/* Device Selector Modal */}
+          <Modal
+            visible={showDeviceSelector}
+            animationType="slide"
+            transparent={true}
+            onRequestClose={() => setShowDeviceSelector(false)}
+          >
+            <View style={styles.modalOverlay}>
+              <View style={styles.modalContainer}>
+                <Text style={styles.modalTitle}>Select Bluetooth Device</Text>
+                <Text style={styles.modalSubtitle}>
+                  Choose a device to connect as your water bottle
+                </Text>
+                
+                {isScanning && (
+                  <View style={styles.scanningIndicator}>
+                    <Text style={styles.scanningText}>🔍 Scanning for devices...</Text>
+                  </View>
+                )}
+
+                <FlatList
+                  data={availableDevices}
+                  keyExtractor={(item) => item.id}
+                  style={styles.deviceList}
+                  renderItem={({ item }) => (
+                    <TouchableOpacity
+                      style={[
+                        styles.deviceItem,
+                        selectedDevice?.id === item.id && styles.selectedDeviceItem
+                      ]}
+                      onPress={() => handleDeviceSelect(item)}
+                    >
+                      <View style={styles.deviceInfo}>
+                        <Text style={styles.deviceName}>
+                          {item.name || item.localName || 'Unknown Device'}
+                        </Text>
+                        <Text style={styles.deviceId}>ID: {item.id}</Text>
+                        {item.rssi && (
+                          <Text style={styles.deviceRssi}>Signal: {item.rssi} dBm</Text>
+                        )}
+                      </View>
+                      {selectedDevice?.id === item.id && (
+                        <Text style={styles.checkmark}>✓</Text>
+                      )}
+                    </TouchableOpacity>
+                  )}
+                  ListEmptyComponent={
+                    !isScanning ? (
+                      <View style={styles.emptyList}>
+                        <Text style={styles.emptyText}>No devices found</Text>
+                        <Text style={styles.emptySubtext}>
+                          Make sure your device is powered on and in pairing mode
+                        </Text>
+                      </View>
+                    ) : null
+                  }
+                />
+
+                <View style={styles.modalActions}>
+                  <TouchableOpacity
+                    style={[styles.modalButton, styles.cancelButton]}
+                    onPress={() => {
+                      stopScanning();
+                      setShowDeviceSelector(false);
+                    }}
+                  >
+                    <Text style={styles.cancelButtonText}>Cancel</Text>
+                  </TouchableOpacity>
+                  
+                  {selectedDevice && (
+                    <TouchableOpacity
+                      style={[styles.modalButton, styles.confirmButton]}
+                      onPress={() => {
+                        stopScanning();
+                        setShowDeviceSelector(false);
+                      }}
+                    >
+                      <Text style={styles.confirmButtonText}>Select Device</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+            </View>
+          </Modal>
 
           {/* Hydration Tip */}
           <TipCard tip={currentTip} />
@@ -529,11 +746,181 @@ const styles = StyleSheet.create({
   connectButton: {
     backgroundColor: '#4CAF50',
   },
+  scanButton: {
+    backgroundColor: '#2196F3',
+  },
+  rescanButton: {
+    backgroundColor: '#FF9800',
+    flex: 1,
+    marginLeft: Spacing.sm,
+  },
   disconnectButton: {
     backgroundColor: '#F44336',
   },
   bluetoothButtonText: {
     ...Typography.body,
+    color: 'white',
+    fontWeight: '600',
+  },
+  selectedDeviceText: {
+    ...Typography.body,
+    color: Colors.text.dark,
+    textAlign: 'center',
+    marginBottom: Spacing.sm,
+    fontWeight: '600',
+  },
+  connectedDeviceText: {
+    ...Typography.body,
+    color: '#4CAF50',
+    textAlign: 'center',
+    marginBottom: Spacing.sm,
+    fontWeight: '600',
+  },
+  deviceActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  // Modal Styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContainer: {
+    backgroundColor: 'white',
+    borderRadius: 20,
+    padding: Spacing.lg,
+    margin: Spacing.lg,
+    maxHeight: '80%',
+    minWidth: '85%',
+  },
+  modalTitle: {
+    ...Typography.header,
+    color: Colors.text.dark,
+    textAlign: 'center',
+    marginBottom: Spacing.xs,
+  },
+  modalSubtitle: {
+    ...Typography.body,
+    color: Colors.text.medium,
+    textAlign: 'center',
+    marginBottom: Spacing.lg,
+  },
+  scanningIndicator: {
+    alignItems: 'center',
+    paddingVertical: Spacing.md,
+  },
+  scanningText: {
+    ...Typography.body,
+    color: Colors.primary,
+  },
+  deviceList: {
+    maxHeight: 300,
+  },
+  deviceItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: Spacing.md,
+    borderRadius: 12,
+    marginVertical: Spacing.xs,
+    backgroundColor: '#f5f5f5',
+  },
+  selectedDeviceItem: {
+    backgroundColor: '#e3f2fd',
+    borderWidth: 2,
+    borderColor: Colors.primary,
+  },
+  deviceInfo: {
+    flex: 1,
+  },
+  deviceName: {
+    ...Typography.body,
+    color: Colors.text.dark,
+    fontWeight: '600',
+    marginBottom: 2,
+  },
+  deviceId: {
+    ...Typography.caption,
+    color: Colors.text.medium,
+    marginBottom: 2,
+  },
+  deviceRssi: {
+    ...Typography.caption,
+    color: Colors.text.light,
+  },
+  checkmark: {
+    ...Typography.body,
+    color: Colors.primary,
+    fontWeight: 'bold',
+    fontSize: 20,
+  },
+  emptyList: {
+    alignItems: 'center',
+    paddingVertical: Spacing.xl,
+  },
+  emptyText: {
+    ...Typography.body,
+    color: Colors.text.medium,
+    marginBottom: Spacing.xs,
+  },
+  emptySubtext: {
+    ...Typography.caption,
+    color: Colors.text.light,
+    textAlign: 'center',
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: Spacing.lg,
+  },
+  modalButton: {
+    paddingVertical: Spacing.sm,
+    paddingHorizontal: Spacing.lg,
+    borderRadius: 12,
+    minWidth: 100,
+    alignItems: 'center',
+  },
+  cancelButton: {
+    backgroundColor: '#f5f5f5',
+  },
+  confirmButton: {
+    backgroundColor: Colors.primary,
+  },
+  cancelButtonText: {
+    ...Typography.body,
+    color: Colors.text.medium,
+  },
+  confirmButtonText: {
+    ...Typography.body,
+    color: 'white',
+    fontWeight: '600',
+  },
+  // Diagnostic button styles
+  diagnosticButtons: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginTop: Spacing.md,
+    paddingTop: Spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0',
+  },
+  diagnosticButton: {
+    paddingVertical: Spacing.xs,
+    paddingHorizontal: Spacing.md,
+    borderRadius: 8,
+    minWidth: 120,
+    alignItems: 'center',
+  },
+  infoButton: {
+    backgroundColor: '#2196F3',
+  },
+  warningButton: {
+    backgroundColor: '#FF9800',
+  },
+  diagnosticButtonText: {
+    ...Typography.caption,
     color: 'white',
     fontWeight: '600',
   },

@@ -1,213 +1,384 @@
-import { BleManager, Device, Service, Characteristic } from 'react-native-ble-plx';
+import { BleManager, Device, Characteristic, State } from 'react-native-ble-plx';
 import { Platform, Alert, PermissionsAndroid } from 'react-native';
 
-// Your IoT device UUIDs (from Arduino code)
+// IoT device configuration - Match your ESP32 code
 const SERVICE_UUID = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
 const CHARACTERISTIC_UUID = 'beb5483e-36e1-4688-b7f5-ea07361b26a8';
 const DEVICE_NAME = 'SmartWaterBottle';
 
 export interface WaterLevelData {
-  distance: number; // in mm
-  waterLevel: number; // percentage (0-1)
-  timestamp: number;
+  distance: number; // Distance in mm from sensor
+  waterLevel: number; // Water level percentage (0-1)
+  timestamp: number; // When data was received
+}
+
+export interface BluetoothDevice {
+  id: string;
+  name: string | null;
+  localName: string | null;
+  rssi?: number;
+  serviceUUIDs?: string[];
 }
 
 export class BluetoothWaterService {
-  private manager: BleManager | null = null;
+  private manager: BleManager;
   private device: Device | null = null;
   private characteristic: Characteristic | null = null;
-  private listeners: ((data: WaterLevelData) => void)[] = [];
-  private connectionListeners: ((connected: boolean) => void)[] = [];
+  private isConnected = false;
+  private isScanning = false;
   private isConnecting = false;
-  private isInitialized = false;
-  private initializationError = false;
   
-  // Bottle configuration
-  private bottleHeight = 150; // mm (default bottle height)
-  private emptyDistance = 140; // mm (distance when bottle is empty)
-  private fullDistance = 20; // mm (distance when bottle is full)
+  // Event listeners
+  private dataListeners: ((data: WaterLevelData) => void)[] = [];
+  private connectionListeners: ((connected: boolean) => void)[] = [];
+  private deviceListeners: ((devices: BluetoothDevice[]) => void)[] = [];
+  private scannedDevices: Map<string, BluetoothDevice> = new Map();
+  
+  // Bottle configuration for water level calculation
+  private bottleHeight = 150; // mm
+  private emptyDistance = 140; // mm (distance when empty)
+  private fullDistance = 20; // mm (distance when full)
 
   constructor() {
-    try {
-      this.initializeBluetooth().catch(error => {
-        console.error('Constructor initialization error:', error);
-        this.initializationError = true;
-      });
-    } catch (error) {
-      console.error('Constructor error:', error);
-      this.initializationError = true;
-    }
+    this.manager = new BleManager();
+    this.initialize();
   }
 
-  private async initializeBluetooth() {
+  private async initialize() {
     try {
-      console.log('Initializing Bluetooth service...');
+      console.log('🔄 Initializing Bluetooth service...');
       
-      // Check if we're on a supported platform
-      if (Platform.OS !== 'android' && Platform.OS !== 'ios') {
-        console.log('Bluetooth not supported on this platform');
-        this.initializationError = true;
-        return;
-      }
-
-      // Check if BLE is available
-      if (!BleManager) {
-        console.error('BLE Manager not available');
-        this.initializationError = true;
-        return;
-      }
-
-      // Request permissions first
+      // Request permissions
       const hasPermissions = await this.requestBluetoothPermissions();
       if (!hasPermissions) {
-        console.log('Bluetooth permissions not granted');
-        this.initializationError = true;
+        console.error('❌ Bluetooth permissions not granted');
         return;
       }
 
-      // Initialize BLE manager with immediate state checking
-      await new Promise<void>((resolve, reject) => {
-        try {
-          this.manager = new BleManager();
-          console.log('✅ BLE Manager created');
-
-          // Check initial state immediately
-          this.manager.state().then(initialState => {
-            console.log('📱 Initial Bluetooth state:', initialState);
-            if (initialState === 'PoweredOn') {
-              console.log('🎯 Bluetooth is ready immediately');
-              this.isInitialized = true;
-              this.initializationError = false;
-              resolve();
-            } else {
-              console.log('⏳ Waiting for Bluetooth to be ready...');
-              
-              // Set up state change listener
-              this.manager!.onStateChange((state) => {
-                console.log('🔄 Bluetooth state changed to:', state);
-                if (state === 'PoweredOn') {
-                  console.log('✅ Bluetooth is now ready!');
-                  this.isInitialized = true;
-                  this.initializationError = false;
-                  resolve();
-                } else {
-                  console.log('⚠️ Bluetooth is not ready:', state);
-                  this.isInitialized = false;
-                  if (state === 'PoweredOff') {
-                    console.log('❌ Bluetooth is disabled');
-                    this.initializationError = true;
-                    reject(new Error('Bluetooth is disabled'));
-                  }
-                }
-              }, true);
-              
-              // Timeout after 10 seconds
-              setTimeout(() => {
-                if (!this.isInitialized) {
-                  console.log('⏰ Bluetooth initialization timeout');
-                  this.initializationError = true;
-                  reject(new Error('Bluetooth initialization timeout'));
-                }
-              }, 10000);
-            }
-          }).catch(error => {
-            console.error('❌ Error checking initial state:', error);
-            this.initializationError = true;
-            reject(error);
-          });
-
-        } catch (error) {
-          console.error('❌ Error creating BLE manager:', error);
-          this.initializationError = true;
-          reject(error);
+      // Wait for Bluetooth to be ready
+      const subscription = this.manager.onStateChange((state) => {
+        console.log(`📡 Bluetooth state: ${state}`);
+        if (state === 'PoweredOn') {
+          subscription.remove();
+          console.log('✅ Bluetooth is ready');
         }
-      });
+      }, true);
 
+      console.log('✅ Bluetooth service initialized');
     } catch (error) {
-      console.error('Error initializing Bluetooth:', error);
-      this.initializationError = true;
+      console.error('❌ Failed to initialize Bluetooth:', error);
     }
   }
 
   private async requestBluetoothPermissions(): Promise<boolean> {
+    if (Platform.OS !== 'android') {
+      return true; // iOS handles permissions automatically
+    }
+
     try {
-      if (Platform.OS === 'android') {
-        // For Android 12+ (API 31+), we need BLUETOOTH_SCAN and BLUETOOTH_CONNECT
-        // For older versions, we need BLUETOOTH and BLUETOOTH_ADMIN
-        const permissions = [];
-        
-        // Check Android API level
-        const apiLevel = parseInt(Platform.constants?.Release || '0', 10);
-        
-        if (apiLevel >= 12) {
-          // Android 12+ permissions
-          permissions.push(
-            'android.permission.BLUETOOTH_SCAN',
-            'android.permission.BLUETOOTH_CONNECT'
-          );
-        } else {
-          // Legacy permissions for older Android
-          permissions.push(
-            'android.permission.BLUETOOTH',
-            'android.permission.BLUETOOTH_ADMIN',
-            'android.permission.ACCESS_COARSE_LOCATION' // Still needed for older versions
-          );
-        }
+      const apiLevel = parseInt(Platform.constants?.Release || '0', 10);
+      const permissions = [];
 
-        // Request permissions
-        let allGranted = true;
-        for (const permission of permissions) {
-          try {
-            const granted = await PermissionsAndroid.request(
-              permission as any // Type assertion for custom permissions
-            );
-            if (granted !== PermissionsAndroid.RESULTS.GRANTED) {
-              console.log(`Permission denied: ${permission}`);
-              allGranted = false;
-            } else {
-              console.log(`Permission granted: ${permission}`);
-            }
-          } catch (error) {
-            console.error(`Error requesting permission ${permission}:`, error);
-            allGranted = false;
-          }
-        }
-
-        if (!allGranted) {
-          Alert.alert(
-            'Bluetooth Permissions Required',
-            'This app needs Bluetooth permissions to connect to your Smart Water Bottle. Please enable Bluetooth permissions in your device settings.',
-            [
-              { text: 'Cancel', style: 'cancel' },
-              { text: 'Open Settings', onPress: () => {
-                // You can add code here to open device settings if needed
-                console.log('User should manually enable Bluetooth permissions in settings');
-              }}
-            ]
-          );
-          return false;
-        }
-        
-        console.log('All Bluetooth permissions granted');
-        return true;
+      if (apiLevel >= 12) {
+        // Android 12+ permissions
+        permissions.push(
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT
+        );
+      } else {
+        // Older Android versions
+        permissions.push(
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH,
+          PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADMIN,
+          PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION
+        );
       }
+
+      console.log('📋 Requesting Bluetooth permissions...');
+      const results = await PermissionsAndroid.requestMultiple(permissions);
       
-      // iOS permissions are handled by the BLE library
-      console.log('iOS - permissions handled by BLE library');
-      return true;
-    } catch (error) {
-      console.error('Error requesting Bluetooth permissions:', error);
-      Alert.alert(
-        'Permission Error',
-        'Unable to request Bluetooth permissions. Please check your device settings and try again.'
+      const allGranted = Object.values(results).every(
+        result => result === PermissionsAndroid.RESULTS.GRANTED
       );
+
+      if (allGranted) {
+        console.log('✅ All Bluetooth permissions granted');
+        return true;
+      } else {
+        console.log('❌ Some Bluetooth permissions denied');
+        Alert.alert(
+          'Permissions Required',
+          'Bluetooth permissions are required to connect to your water bottle device.',
+          [{ text: 'OK' }]
+        );
+        return false;
+      }
+    } catch (error) {
+      console.error('❌ Error requesting permissions:', error);
       return false;
     }
   }
 
+  // Scan for all available Bluetooth devices
+  public async scanForDevices(timeoutMs: number = 15000): Promise<BluetoothDevice[]> {
+    if (this.isScanning) {
+      console.log('⚠️ Already scanning');
+      return Array.from(this.scannedDevices.values());
+    }
+
+    try {
+      // Check Bluetooth state
+      const state = await this.manager.state();
+      if (state !== 'PoweredOn') {
+        Alert.alert(
+          'Bluetooth Disabled',
+          'Please enable Bluetooth to scan for devices.',
+          [{ text: 'OK' }]
+        );
+        return [];
+      }
+
+      console.log('🔍 Starting device scan...');
+      this.isScanning = true;
+      this.scannedDevices.clear();
+
+      return new Promise((resolve) => {
+        // Scan timeout
+        const timeout = setTimeout(() => {
+          this.manager.stopDeviceScan();
+          this.isScanning = false;
+          const devices = Array.from(this.scannedDevices.values());
+          console.log(`✅ Scan completed. Found ${devices.length} devices`);
+          resolve(devices);
+        }, timeoutMs);
+
+        // Start scanning
+        this.manager.startDeviceScan(null, { allowDuplicates: false }, (error, device) => {
+          if (error) {
+            console.error('❌ Scan error:', error);
+            clearTimeout(timeout);
+            this.manager.stopDeviceScan();
+            this.isScanning = false;
+            resolve([]);
+            return;
+          }
+
+          if (device && (device.name || device.localName)) {
+            console.log(`📱 Found device: ${device.name || device.localName} (${device.id})`);
+            
+            const bluetoothDevice: BluetoothDevice = {
+              id: device.id,
+              name: device.name,
+              localName: device.localName,
+              rssi: device.rssi,
+              serviceUUIDs: device.serviceUUIDs
+            };
+
+            this.scannedDevices.set(device.id, bluetoothDevice);
+            
+            // Notify listeners of updated device list
+            const currentDevices = Array.from(this.scannedDevices.values());
+            this.notifyDeviceListeners(currentDevices);
+          }
+        });
+      });
+    } catch (error) {
+      console.error('❌ Failed to scan for devices:', error);
+      this.isScanning = false;
+      return [];
+    }
+  }
+
+  // Stop scanning for devices
+  public stopScanning() {
+    if (this.isScanning) {
+      this.manager.stopDeviceScan();
+      this.isScanning = false;
+      console.log('⏹️ Device scan stopped');
+    }
+  }
+
+  // Connect to a specific device by ID
+  public async connectToDevice(deviceId: string): Promise<boolean> {
+    if (this.isConnecting) {
+      console.log('⚠️ Already connecting to a device');
+      return false;
+    }
+
+    if (this.isConnected) {
+      console.log('⚠️ Already connected to a device');
+      return true;
+    }
+
+    try {
+      console.log(`🔗 Connecting to device: ${deviceId}`);
+      this.isConnecting = true;
+      this.stopScanning();
+
+      // Connect to device
+      this.device = await this.manager.connectToDevice(deviceId, {
+        requestMTU: 512, // Request larger MTU for better data transfer
+        timeout: 10000 // 10 second timeout
+      });
+
+      console.log('🔍 Discovering services and characteristics...');
+      await this.device.discoverAllServicesAndCharacteristics();
+
+      // Find the service and characteristic
+      const services = await this.device.services();
+      console.log(`📋 Found ${services.length} services`);
+
+      // Try to find our expected service first
+      let service = services.find(s => 
+        s.uuid.toLowerCase() === SERVICE_UUID.toLowerCase()
+      );
+
+      // If our service not found, use the first available service
+      if (!service) {
+        console.log('⚠️ Expected service not found, using first available service');
+        service = services[0];
+      }
+
+      if (!service) {
+        throw new Error('No services found on device');
+      }
+
+      console.log(`✅ Using service: ${service.uuid}`);
+      
+      // Get characteristics
+      const characteristics = await service.characteristics();
+      console.log(`📋 Found ${characteristics.length} characteristics`);
+
+      // Try to find our expected characteristic first
+      this.characteristic = characteristics.find(c =>
+        c.uuid.toLowerCase() === CHARACTERISTIC_UUID.toLowerCase()
+      );
+
+      // If our characteristic not found, find any readable/notifiable characteristic
+      if (!this.characteristic) {
+        console.log('⚠️ Expected characteristic not found, searching for compatible characteristic');
+        this.characteristic = characteristics.find(c =>
+          c.isReadable || c.isNotifiable
+        );
+      }
+
+      if (!this.characteristic) {
+        throw new Error('No readable characteristics found on device');
+      }
+
+      console.log(`✅ Using characteristic: ${this.characteristic.uuid}`);
+
+      // Start monitoring data
+      await this.startDataMonitoring();
+
+      // Set up disconnection handler
+      this.device.onDisconnected((error, device) => {
+        console.log('📱 Device disconnected:', device?.name || 'Unknown');
+        if (error) {
+          console.error('❌ Disconnection error:', error);
+        }
+        this.handleDisconnection();
+      });
+
+      this.isConnected = true;
+      this.isConnecting = false;
+      this.notifyConnectionListeners(true);
+      
+      console.log('🎉 Successfully connected to device!');
+      return true;
+
+    } catch (error) {
+      console.error('❌ Failed to connect to device:', error);
+      this.isConnecting = false;
+      this.handleConnectionError(error);
+      return false;
+    }
+  }
+
+  // Start monitoring data from the connected device
+  private async startDataMonitoring() {
+    if (!this.characteristic) {
+      throw new Error('No characteristic available for monitoring');
+    }
+
+    try {
+      console.log('📊 Starting data monitoring...');
+      
+      // Monitor characteristic for data changes
+      this.characteristic.monitor((error, characteristic) => {
+        if (error) {
+          console.error('❌ Monitoring error:', error);
+          return;
+        }
+
+        if (characteristic?.value) {
+          try {
+            // Decode base64 data
+            const rawData = Buffer.from(characteristic.value, 'base64').toString('utf8');
+            console.log(`📨 Received data: ${rawData}`);
+            
+            // Parse the data
+            const waterData = this.parseReceivedData(rawData);
+            if (waterData) {
+              console.log(`💧 Water level: ${(waterData.waterLevel * 100).toFixed(1)}% (${waterData.distance}mm)`);
+              this.notifyDataListeners(waterData);
+            }
+          } catch (parseError) {
+            console.error('❌ Failed to parse received data:', parseError);
+          }
+        }
+      });
+
+      console.log('✅ Data monitoring started');
+    } catch (error) {
+      console.error('❌ Failed to start data monitoring:', error);
+      throw error;
+    }
+  }
+
+  // Parse data received from IoT device
+  private parseReceivedData(rawData: string): WaterLevelData | null {
+    try {
+      // Try parsing as JSON first (preferred format)
+      const jsonData = JSON.parse(rawData);
+      if (jsonData.distance !== undefined) {
+        const distance = parseInt(jsonData.distance);
+        if (!isNaN(distance)) {
+          return {
+            distance,
+            waterLevel: this.convertDistanceToWaterLevel(distance),
+            timestamp: jsonData.timestamp || Date.now()
+          };
+        }
+      }
+    } catch (jsonError) {
+      // Not JSON, try parsing as plain distance value
+      const distance = parseInt(rawData.trim());
+      if (!isNaN(distance)) {
+        return {
+          distance,
+          waterLevel: this.convertDistanceToWaterLevel(distance),
+          timestamp: Date.now()
+        };
+      }
+    }
+
+    console.warn('⚠️ Could not parse data:', rawData);
+    return null;
+  }
+
+  // Convert distance to water level percentage
+  private convertDistanceToWaterLevel(distance: number): number {
+    if (distance <= this.fullDistance) return 1.0; // 100% full
+    if (distance >= this.emptyDistance) return 0.0; // 0% empty
+    
+    // Linear interpolation between full and empty
+    const waterLevel = 1 - ((distance - this.fullDistance) / (this.emptyDistance - this.fullDistance));
+    return Math.max(0, Math.min(1, waterLevel));
+  }
+
+  // Configure bottle dimensions for accurate water level calculation
   public setBottleConfiguration(capacity: number) {
-    // Adjust distances based on bottle capacity
-    // This is a rough calculation - you may need to calibrate
     switch (capacity) {
       case 500:
         this.bottleHeight = 120;
@@ -230,301 +401,53 @@ export class BluetoothWaterService {
         this.fullDistance = 30;
         break;
       default:
-        // Use default values
+        console.log('⚠️ Using default bottle configuration');
         break;
     }
+    console.log(`🍼 Bottle configured: ${capacity}ml (empty: ${this.emptyDistance}mm, full: ${this.fullDistance}mm)`);
   }
 
-  private convertDistanceToWaterLevel(distance: number): number {
-    // Convert distance to water level percentage
-    if (distance <= this.fullDistance) return 1.0; // 100% full
-    if (distance >= this.emptyDistance) return 0.0; // 0% empty
-    
-    // Linear interpolation between full and empty
-    const waterLevel = 1 - ((distance - this.fullDistance) / (this.emptyDistance - this.fullDistance));
-    return Math.max(0, Math.min(1, waterLevel));
-  }
-
-  public async scanAndConnect(): Promise<boolean> {
+  // Disconnect from current device
+  public async disconnect(): Promise<void> {
     try {
-      // Safety checks
-      if (this.initializationError) {
-        console.error('Bluetooth service failed to initialize');
-        Alert.alert(
-          'Bluetooth Error',
-          'Bluetooth service is not available. Please restart the app and ensure Bluetooth is enabled.',
-          [{ text: 'OK' }]
-        );
-        return false;
+      if (this.device && this.isConnected) {
+        console.log('🔌 Disconnecting from device...');
+        await this.device.cancelConnection();
       }
-
-      if (this.isConnecting) {
-        console.log('Already connecting...');
-        return false;
-      }
-
-      if (!this.manager) {
-        console.error('BLE Manager not initialized');
-        Alert.alert(
-          'Bluetooth Error',
-          'Bluetooth is not ready. Please restart the app.',
-          [{ text: 'OK' }]
-        );
-        return false;
-      }
-
-      if (!this.isInitialized) {
-        console.log('BLE Manager not ready, waiting...');
-        // Try to wait for initialization
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        if (!this.isInitialized) {
-          Alert.alert(
-            'Bluetooth Not Ready',
-            'Bluetooth is not ready yet. Please ensure Bluetooth is enabled and try again.',
-            [{ text: 'OK' }]
-          );
-          return false;
-        }
-      }
-
-      this.isConnecting = true;
-      console.log('Starting scan for Smart Water Bottle...');
-      
-      // Check Bluetooth state
-      const state = await this.manager.state();
-      console.log('Current Bluetooth state:', state);
-      
-      if (state !== 'PoweredOn') {
-        Alert.alert(
-          'Bluetooth Disabled',
-          'Please enable Bluetooth in your device settings to connect to your Smart Water Bottle.',
-          [{ text: 'OK' }]
-        );
-        this.isConnecting = false;
-        return false;
-      }
-
-      return new Promise((resolve) => {
-        if (!this.manager) {
-          console.error('Manager disappeared during scan');
-          this.isConnecting = false;
-          resolve(false);
-          return;
-        }
-
-        // Set a timeout for scanning
-        const scanTimeout = setTimeout(() => {
-          console.log('Scan timeout - device not found');
-          this.manager?.stopDeviceScan();
-          this.isConnecting = false;
-          Alert.alert(
-            'Device Not Found',
-            'Smart Water Bottle not found. Make sure your device is powered on and nearby.',
-            [{ text: 'OK' }]
-          );
-          resolve(false);
-        }, 30000); // 30 seconds timeout
-
-        // Enhanced scanning - try both service UUID and name-based discovery
-        console.log('Starting enhanced BLE scan...');
-        
-        this.manager.startDeviceScan(
-          null, // Scan for all devices first
-          { allowDuplicates: false },
-          async (error, device) => {
-            try {
-              if (error) {
-                console.error('Scan error:', error);
-                clearTimeout(scanTimeout);
-                this.manager?.stopDeviceScan();
-                this.isConnecting = false;
-                Alert.alert(
-                  'Scan Error',
-                  `Failed to scan for devices: ${error.message || 'Unknown error'}`,
-                  [{ text: 'OK' }]
-                );
-                resolve(false);
-                return;
-              }
-
-              if (device) {
-                console.log(`Found device: ${device.name || 'Unknown'} (${device.id})`);
-                
-                // Check multiple ways to identify our device
-                const isOurDevice = 
-                  device.name === DEVICE_NAME ||
-                  device.localName === DEVICE_NAME ||
-                  (device.serviceUUIDs && device.serviceUUIDs.includes(SERVICE_UUID)) ||
-                  (device.name && device.name.toLowerCase().includes('water')) ||
-                  (device.name && device.name.toLowerCase().includes('smart'));
-
-                if (isOurDevice) {
-                  console.log('Found Smart Water Bottle:', {
-                    name: device.name,
-                    localName: device.localName,
-                    id: device.id,
-                    serviceUUIDs: device.serviceUUIDs
-                  });
-                  
-                  clearTimeout(scanTimeout);
-                  this.manager?.stopDeviceScan();
-
-                  const connected = await this.connectToDevice(device);
-                  this.isConnecting = false;
-                  resolve(connected);
-                }
-              }
-            } catch (scanError) {
-              console.error('Error in scan callback:', scanError);
-              clearTimeout(scanTimeout);
-              this.manager?.stopDeviceScan();
-              this.isConnecting = false;
-              resolve(false);
-            }
-          }
-        );
-      });
     } catch (error) {
-      console.error('Error in scanAndConnect:', error);
-      this.isConnecting = false;
-      Alert.alert(
-        'Connection Error',
-        `Failed to connect: ${error instanceof Error ? error.message : 'Unknown error'}`,
-        [{ text: 'OK' }]
-      );
-      return false;
-    }
-  }
-            
-
-  private async connectToDevice(device: Device): Promise<boolean> {
-    try {
-      console.log('Connecting to device...');
-      this.device = await device.connect();
-      
-      console.log('Discovering services...');
-      await this.device.discoverAllServicesAndCharacteristics();
-      
-      const services = await this.device.services();
-      const service = services.find(s => s.uuid.toLowerCase() === SERVICE_UUID.toLowerCase());
-      
-      if (!service) {
-        console.error('Service not found');
-        return false;
-      }
-
-      const characteristics = await service.characteristics();
-      this.characteristic = characteristics.find(c => 
-        c.uuid.toLowerCase() === CHARACTERISTIC_UUID.toLowerCase()
-      ) || null;
-
-      if (!this.characteristic) {
-        console.error('Characteristic not found');
-        return false;
-      }
-
-      // Start monitoring for data
-      await this.startMonitoring();
-      
-      // Set up disconnection monitoring
-      this.device.onDisconnected(() => {
-        console.log('Device disconnected');
-        this.device = null;
-        this.characteristic = null;
-        this.notifyConnectionListeners(false);
-        
-        // Auto-reconnect after 5 seconds
-        setTimeout(() => {
-          this.scanAndConnect();
-        }, 5000);
-      });
-
-      console.log('Successfully connected to Smart Water Bottle');
-      this.notifyConnectionListeners(true);
-      return true;
-    } catch (error) {
-      console.error('Connection error:', error);
-      return false;
+      console.error('❌ Error during disconnection:', error);
+    } finally {
+      this.handleDisconnection();
     }
   }
 
-  private async startMonitoring() {
-    if (!this.characteristic) return;
-
-    try {
-      console.log('Starting data monitoring...');
-      await this.characteristic.monitor((error, characteristic) => {
-        if (error) {
-          console.error('Monitoring error:', error);
-          return;
-        }
-
-        if (characteristic && characteristic.value) {
-          try {
-            const data = Buffer.from(characteristic.value, 'base64').toString();
-            console.log('Raw data received:', data);
-            
-            // Try to parse as JSON first (new ESP32 format)
-            try {
-              const jsonData = JSON.parse(data);
-              if (jsonData.distance !== undefined) {
-                const distance = parseInt(jsonData.distance);
-                const timestamp = jsonData.timestamp ? parseInt(jsonData.timestamp) : Date.now();
-                
-                if (!isNaN(distance)) {
-                  const waterLevel = this.convertDistanceToWaterLevel(distance);
-                  
-                  const waterData: WaterLevelData = {
-                    distance,
-                    waterLevel,
-                    timestamp: timestamp
-                  };
-
-                  console.log(`JSON Data - Distance: ${distance}mm, Water Level: ${(waterLevel * 100).toFixed(1)}%`);
-                  this.notifyListeners(waterData);
-                }
-                return;
-              }
-            } catch (jsonError) {
-              // Not JSON, try parsing as plain number (legacy format)
-              console.log('Not JSON, trying plain number format');
-            }
-            
-            // Fallback: try parsing as plain distance value
-            const distance = parseInt(data.trim());
-            if (!isNaN(distance)) {
-              const waterLevel = this.convertDistanceToWaterLevel(distance);
-              
-              const waterData: WaterLevelData = {
-                distance,
-                waterLevel,
-                timestamp: Date.now()
-              };
-
-              console.log(`Plain Data - Distance: ${distance}mm, Water Level: ${(waterLevel * 100).toFixed(1)}%`);
-              this.notifyListeners(waterData);
-            } else {
-              console.warn('Could not parse distance data:', data);
-            }
-          } catch (parseError) {
-            console.error('Error parsing received data:', parseError);
-          }
-        }
-      });
-      
-      console.log('Data monitoring started successfully');
-    } catch (error) {
-      console.error('Error starting monitoring:', error);
-    }
+  // Handle disconnection cleanup
+  private handleDisconnection() {
+    this.device = null;
+    this.characteristic = null;
+    this.isConnected = false;
+    this.isConnecting = false;
+    this.notifyConnectionListeners(false);
+    console.log('🔌 Device disconnected');
   }
-     
 
+  // Handle connection errors
+  private handleConnectionError(error: any) {
+    const errorMessage = error?.message || 'Unknown connection error';
+    Alert.alert(
+      'Connection Failed',
+      `Failed to connect to device: ${errorMessage}`,
+      [{ text: 'OK' }]
+    );
+  }
+
+  // Event listener management
   public addDataListener(callback: (data: WaterLevelData) => void) {
-    this.listeners.push(callback);
+    this.dataListeners.push(callback);
   }
 
   public removeDataListener(callback: (data: WaterLevelData) => void) {
-    this.listeners = this.listeners.filter(listener => listener !== callback);
+    this.dataListeners = this.dataListeners.filter(listener => listener !== callback);
   }
 
   public addConnectionListener(callback: (connected: boolean) => void) {
@@ -535,37 +458,117 @@ export class BluetoothWaterService {
     this.connectionListeners = this.connectionListeners.filter(listener => listener !== callback);
   }
 
-  private notifyListeners(data: WaterLevelData) {
-    this.listeners.forEach(listener => listener(data));
+  public addDeviceListener(callback: (devices: BluetoothDevice[]) => void) {
+    this.deviceListeners.push(callback);
+  }
+
+  public removeDeviceListener(callback: (devices: BluetoothDevice[]) => void) {
+    this.deviceListeners = this.deviceListeners.filter(listener => listener !== callback);
+  }
+
+  // Notify listeners
+  private notifyDataListeners(data: WaterLevelData) {
+    this.dataListeners.forEach(listener => {
+      try {
+        listener(data);
+      } catch (error) {
+        console.error('❌ Error in data listener:', error);
+      }
+    });
   }
 
   private notifyConnectionListeners(connected: boolean) {
-    this.connectionListeners.forEach(listener => listener(connected));
-  }
-
-  public isConnected(): boolean {
-    return this.device !== null && this.characteristic !== null;
-  }
-
-  public async disconnect() {
-    if (this.device) {
+    this.connectionListeners.forEach(listener => {
       try {
-        await this.device.cancelConnection();
+        listener(connected);
       } catch (error) {
-        console.error('Error disconnecting:', error);
+        console.error('❌ Error in connection listener:', error);
       }
-    }
-    this.device = null;
-    this.characteristic = null;
-    this.notifyConnectionListeners(false);
+    });
   }
 
-  public destroy() {
-    this.disconnect();
-    if (this.manager) {
-      this.manager.destroy();
+  private notifyDeviceListeners(devices: BluetoothDevice[]) {
+    this.deviceListeners.forEach(listener => {
+      try {
+        listener(devices);
+      } catch (error) {
+        console.error('❌ Error in device listener:', error);
+      }
+    });
+  }
+
+  // Utility methods
+  public getConnectionStatus(): boolean {
+    return this.isConnected;
+  }
+
+  public getConnectedDevice(): Device | null {
+    return this.device;
+  }
+
+  public async getBluetoothState(): Promise<State> {
+    return await this.manager.state();
+  }
+
+  // Diagnostic information
+  public async getDiagnostics(): Promise<string> {
+    const diagnostics = [];
+    
+    try {
+      const state = await this.manager.state();
+      diagnostics.push(`🔧 Bluetooth Diagnostics:`);
+      diagnostics.push(`Platform: ${Platform.OS}`);
+      diagnostics.push(`Bluetooth State: ${state}`);
+      diagnostics.push(`Connected: ${this.isConnected ? 'Yes' : 'No'}`);
+      diagnostics.push(`Connecting: ${this.isConnecting ? 'Yes' : 'No'}`);
+      diagnostics.push(`Scanning: ${this.isScanning ? 'Yes' : 'No'}`);
+      
+      if (this.device) {
+        diagnostics.push(`Device Name: ${this.device.name || 'Unknown'}`);
+        diagnostics.push(`Device ID: ${this.device.id}`);
+      }
+      
+      if (this.characteristic) {
+        diagnostics.push(`Characteristic: ${this.characteristic.uuid}`);
+      }
+
+      // Check permissions on Android
+      if (Platform.OS === 'android') {
+        const apiLevel = parseInt(Platform.constants?.Release || '0', 10);
+        diagnostics.push(`Android API Level: ${apiLevel}`);
+        
+        if (apiLevel >= 12) {
+          const scanPerm = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN);
+          const connectPerm = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT);
+          diagnostics.push(`BLUETOOTH_SCAN: ${scanPerm ? 'Granted' : 'Denied'}`);
+          diagnostics.push(`BLUETOOTH_CONNECT: ${connectPerm ? 'Granted' : 'Denied'}`);
+        } else {
+          const bluetoothPerm = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.BLUETOOTH);
+          const locationPerm = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION);
+          diagnostics.push(`BLUETOOTH: ${bluetoothPerm ? 'Granted' : 'Denied'}`);
+          diagnostics.push(`LOCATION: ${locationPerm ? 'Granted' : 'Denied'}`);
+        }
+      }
+      
+    } catch (error) {
+      diagnostics.push(`Error getting diagnostics: ${error}`);
     }
-    this.listeners = [];
+
+    return diagnostics.join('\n');
+  }
+
+  // Cleanup
+  public destroy() {
+    console.log('🧹 Destroying Bluetooth service...');
+    this.disconnect();
+    this.stopScanning();
+    this.manager.destroy();
+    this.dataListeners = [];
     this.connectionListeners = [];
+    this.deviceListeners = [];
+    this.scannedDevices.clear();
   }
 }
+
+// Export singleton instance
+export const bluetoothWaterService = new BluetoothWaterService();
