@@ -1,3 +1,10 @@
+import 'react-native-get-random-values'; // example other polyfills if used
+import { Buffer } from 'buffer';
+
+if (typeof global.Buffer === 'undefined') {
+  global.Buffer = Buffer;
+}
+
 import React, { useState, useEffect } from 'react';
 import {
   View,
@@ -70,7 +77,7 @@ export default function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [currentTip, setCurrentTip] = useState(getMotivationalTip());
   const [previousWaterLevel, setPreviousWaterLevel] = useState(currentWaterLevel);
-
+  const [showDeviceSelector, setShowDeviceSelector] = useState(false);
   // Fallback simulation when not connected to Bluetooth
   useEffect(() => {
     if (isConnected) return; // Skip simulation if Bluetooth is connected
