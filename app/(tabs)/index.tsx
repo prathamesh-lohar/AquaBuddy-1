@@ -72,8 +72,19 @@ export default function HomeScreen() {
   // Fallback simulation when Bluetooth is not connected
   const [simulatedWaterLevel, setSimulatedWaterLevel] = useState(0.9);
   
-  // Use Bluetooth data if available, otherwise use simulation
-  const currentWaterLevel = isConnected ? bluetoothWaterLevel : simulatedWaterLevel;
+  // Use app-side calibration if available, otherwise use ESP32 percentage
+  const currentWaterLevel = (() => {
+    if (isConnected && sensorData) {
+      if (calibrationService.isDeviceCalibrated()) {
+        // Use app-side calibration for accurate water level
+        return calibrationService.calculateWaterLevel(sensorData) / 100; // Convert to 0-1 range
+      } else {
+        // Fallback to ESP32 percentage, but convert to 0-1 range
+        return Math.min(Math.max(sensorData.waterLevel / 100, 0), 1);
+      }
+    }
+    return simulatedWaterLevel; // Fallback simulation
+  })();
   
   // App State
   const selectedBottleSize = user?.bottleCapacity || 1000;
@@ -126,12 +137,20 @@ export default function HomeScreen() {
     return () => clearInterval(simulateWaterConsumption);
   }, [isConnected, simulatedWaterLevel]);
 
-  // Track water consumption when level decreases
+  // Track water consumption when level decreases (with minimum threshold to avoid noise)
   useEffect(() => {
-    if (currentWaterLevel < previousWaterLevel && previousWaterLevel > 0) {
-      const consumption = (previousWaterLevel - currentWaterLevel) * selectedBottleSize;
-      setDailyWaterConsumed(prev => prev + consumption);
-      console.log(`Real IoT: User consumed ${Math.round(consumption)}ml`);
+    const MIN_CONSUMPTION_THRESHOLD = 0.02; // 2% minimum change to register as consumption
+    const levelDifference = previousWaterLevel - currentWaterLevel;
+    
+    if (levelDifference > MIN_CONSUMPTION_THRESHOLD && previousWaterLevel > 0) {
+      const consumption = levelDifference * selectedBottleSize;
+      const maxReasonableConsumption = selectedBottleSize * 0.5; // Max 50% of bottle in one reading
+      
+      // Cap consumption to reasonable amounts
+      const actualConsumption = Math.min(consumption, maxReasonableConsumption);
+      setDailyWaterConsumed(prev => prev + actualConsumption);
+      
+      console.log(`Water consumed: ${Math.round(actualConsumption)}ml (Level: ${(previousWaterLevel * 100).toFixed(1)}% → ${(currentWaterLevel * 100).toFixed(1)}%)`);
     }
     setPreviousWaterLevel(currentWaterLevel);
   }, [currentWaterLevel, selectedBottleSize, previousWaterLevel]);
@@ -156,6 +175,23 @@ export default function HomeScreen() {
 
     return () => clearInterval(checkInactivity);
   }, [isConnected, lastUpdateTime, isDataFresh]);
+
+  // Water level notifications
+  useEffect(() => {
+    if (!isConnected || !sensorData) return;
+
+    const waterLevelPercent = currentWaterLevel * 100;
+    
+    // Send low water notification at 10%
+    if (waterLevelPercent <= 10 && waterLevelPercent > 0) {
+      notificationService.sendLowWaterNotification(waterLevelPercent);
+    }
+    
+    // Send empty bottle notification at 0%
+    if (waterLevelPercent <= 0) {
+      notificationService.sendEmptyBottleNotification();
+    }
+  }, [currentWaterLevel, isConnected, sensorData]);
 
   // Alert for empty bottle (when connected)
   useEffect(() => {
@@ -450,10 +486,16 @@ Capacity: ${calibration.bottleCapacity}ml`,
                     📏 Distance: {currentDistance}mm
                   </Text>
                   <Text style={styles.iotInfoText}>
+                    🔧 Calibration: {isCalibrated ? 'Calibrated ✅' : 'Not Calibrated ❌'}
+                  </Text>
+                  <Text style={styles.iotInfoText}>
+                    💧 Water Level: {(currentWaterLevel * 100).toFixed(1)}% ({isCalibrated ? 'App Calculated' : 'ESP32 Raw'})
+                  </Text>
+                  <Text style={styles.iotInfoText}>
                     ⏰ Last update: {lastUpdateTime ? new Date(lastUpdateTime).toLocaleTimeString() : 'No data'}
                   </Text>
                   <Text style={styles.iotInfoText}>
-                    � Data: {isDataFresh ? 'Fresh' : 'Stale'}
+                    📊 Data: {isDataFresh ? 'Fresh' : 'Stale'}
                   </Text>
                 </>
               )}
@@ -489,8 +531,8 @@ Capacity: ${calibration.bottleCapacity}ml`,
                           onPress={handleBluetoothConnect}
                           disabled={isConnecting}
                         >
-                          <Text style={styles.bluetoothButtonText}>
-                            {isConnecting ? '🔄 Connecting...' : '📶 Connect'}
+                          <Text style={styles.bluetoothButtonText} numberOfLines={1} adjustsFontSizeToFit>
+                            {isConnecting ? 'Connecting...' : 'Connect'}
                           </Text>
                         </TouchableOpacity>
                         <TouchableOpacity
@@ -498,8 +540,8 @@ Capacity: ${calibration.bottleCapacity}ml`,
                           onPress={handleScanForDevices}
                           disabled={isScanning}
                         >
-                          <Text style={styles.bluetoothButtonText}>
-                            {isScanning ? '🔍 Scanning...' : '🔄 Rescan'}
+                          <Text style={styles.bluetoothButtonText} numberOfLines={1} adjustsFontSizeToFit>
+                            {isScanning ? 'Scanning...' : 'Rescan'}
                           </Text>
                         </TouchableOpacity>
                       </View>
@@ -806,15 +848,18 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
   bluetoothControls: {
-    marginTop: Spacing.md,
+    marginTop: 16,
+    paddingHorizontal: 8,
     alignItems: 'center',
   },
   bluetoothButton: {
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.sm,
-    borderRadius: 20,
-    minWidth: 200,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    borderRadius: 8,
+    minWidth: 90,
+    maxWidth: '47%',
     alignItems: 'center',
+    justifyContent: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -822,34 +867,35 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   connectButton: {
-    backgroundColor: '#4CAF50',
+    backgroundColor: '#28A745',
   },
   scanButton: {
     backgroundColor: '#2196F3',
   },
   rescanButton: {
     backgroundColor: '#FF9800',
-    flex: 1,
-    marginLeft: Spacing.sm,
   },
   disconnectButton: {
     backgroundColor: '#F44336',
   },
   bluetoothButtonText: {
-    ...Typography.body,
-    color: 'white',
+    color: '#FFFFFF',
+    fontSize: 13,
     fontWeight: '600',
+    textAlign: 'center',
   },
   selectedDeviceText: {
     ...Typography.body,
     color: Colors.text.dark,
     textAlign: 'center',
-    marginBottom: Spacing.sm,
+    marginBottom: 12,
     fontWeight: '600',
+    paddingHorizontal: 8,
   },
   connectedDeviceText: {
     ...Typography.body,
-    color: '#4CAF50',
+    color: '#fff',
+    
     textAlign: 'center',
     marginBottom: Spacing.sm,
     fontWeight: '600',
@@ -857,6 +903,10 @@ const styles = StyleSheet.create({
   deviceActions: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 12,
+    paddingHorizontal: 8,
+    gap: 12,
   },
   // Modal Styles
   modalOverlay: {
@@ -1030,5 +1080,188 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+  },
+  // Professional Bluetooth Control Panel Styles
+  bluetoothControlPanel: {
+    backgroundColor: '#F8F9FA',
+    borderRadius: 12,
+    padding: 16,
+    marginVertical: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  connectionStatusHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E9ECEF',
+  },
+  statusIndicatorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  statusIndicator: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    marginRight: 8,
+  },
+  statusConnected: {
+    backgroundColor: '#28A745',
+  },
+  statusDisconnected: {
+    backgroundColor: '#DC3545',
+  },
+  statusText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#495057',
+  },
+  deviceLabel: {
+    fontSize: 14,
+    color: '#6C757D',
+    fontWeight: '500',
+  },
+  connectionControls: {
+    marginBottom: 16,
+  },
+  disconnectedControls: {
+    alignItems: 'stretch',
+  },
+  selectedDeviceContainer: {
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#DEE2E6',
+  },
+  bluetoothDeviceInfo: {
+    marginBottom: 12,
+  },
+  bluetoothDeviceName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#212529',
+    marginBottom: 4,
+  },
+  bluetoothDeviceId: {
+    fontSize: 12,
+    color: '#6C757D',
+    fontFamily: 'monospace',
+  },
+  actionButtonsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 8,
+  },
+  primaryButton: {
+    backgroundColor: '#007BFF',
+    borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    minWidth: '60%',
+    maxWidth: '65%',
+    shadowColor: '#007BFF',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  primaryConnectButton: {
+    backgroundColor: '#28A745',
+  },
+  secondaryButton: {
+    backgroundColor: '#6C757D',
+    borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    minWidth: '30%',
+    maxWidth: '35%',
+  },
+  buttonDisabled: {
+    opacity: 0.6,
+  },
+  buttonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  buttonIcon: {
+    fontSize: 16,
+    marginRight: 8,
+    color: '#fff',
+  },
+  primaryButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  secondaryButtonIcon: {
+    fontSize: 14,
+    marginRight: 6,
+    color: '#fff',
+  },
+  secondaryButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '500',
+  },
+  connectedControls: {
+    alignItems: 'center',
+  },
+  professionalDisconnectButton: {
+    backgroundColor: '#DC3545',
+    borderRadius: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+  },
+  disconnectButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  advancedControls: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#E9ECEF',
+  },
+  professionalDiagnosticButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#DEE2E6',
+  },
+  resetButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#FFC107',
+  },
+  diagnosticButtonIcon: {
+    fontSize: 14,
+    marginRight: 6,
+  },
+  professionalDiagnosticButtonText: {
+    fontSize: 12,
+    color: '#495057',
+    fontWeight: '500',
   },
 });

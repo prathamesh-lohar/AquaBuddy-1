@@ -71,7 +71,19 @@ export const useBluetoothWater = () => {
   }, [user?.bottleCapacity]);
 
   const scanForDevices = async () => {
-    if (!bluetoothService.current || isScanning) return [];
+    if (!bluetoothService.current) {
+      console.error('❌ Bluetooth service not initialized, reinitializing...');
+      // Try to reinitialize
+      try {
+        bluetoothService.current = new BluetoothWaterService();
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      } catch (error) {
+        console.error('❌ Failed to reinitialize Bluetooth service:', error);
+        return [];
+      }
+    }
+    
+    if (isScanning) return [];
 
     setIsScanning(true);
     setConnectionError(null);
@@ -190,11 +202,22 @@ export const useBluetoothWater = () => {
   };
 
   const forceReinitialize = async (): Promise<boolean> => {
-    if (!bluetoothService.current) {
+    try {
+      setConnectionError(null);
+      
+      if (bluetoothService.current) {
+        return await bluetoothService.current.reinitialize();
+      }
+      
+      // Create new service if none exists
+      bluetoothService.current = new BluetoothWaterService();
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      return true;
+    } catch (error) {
+      console.error('❌ Failed to reinitialize:', error);
+      setConnectionError('Failed to reinitialize Bluetooth');
       return false;
     }
-    setConnectionError(null);
-    return await bluetoothService.current.forceReinitialize();
   };
 
   return {
@@ -223,5 +246,6 @@ export const useBluetoothWater = () => {
     connectToDevice,
     disconnectDevice,
     getDiagnostics,
+    forceReinitialize,
   };
 };

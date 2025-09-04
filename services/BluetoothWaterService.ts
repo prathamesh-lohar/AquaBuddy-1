@@ -48,6 +48,37 @@ export class BluetoothWaterService {
     this.initialize();
   }
 
+  // Add method to reinitialize the BLE manager
+  public async reinitialize(): Promise<boolean> {
+    try {
+      console.log('🔄 Reinitializing Bluetooth service...');
+      
+      // Clean up existing manager
+      if (this.manager) {
+        try {
+          this.manager.destroy();
+        } catch (error) {
+          console.log('Manager already destroyed');
+        }
+      }
+
+      // Reset state
+      this.handleDisconnection();
+      
+      // Create new manager
+      this.manager = new BleManager();
+      
+      // Initialize the new manager
+      await this.initialize();
+      
+      console.log('✅ Bluetooth service reinitialized');
+      return true;
+    } catch (error) {
+      console.error('❌ Failed to reinitialize Bluetooth service:', error);
+      return false;
+    }
+  }
+
   private async initialize() {
     try {
       console.log('🔄 Initializing Bluetooth service...');
@@ -128,7 +159,19 @@ export class BluetoothWaterService {
     }
 
     try {
-      const state = await this.manager.state();
+      // Check if manager is destroyed and reinitialize if needed
+      let state: State;
+      try {
+        state = await this.manager.state();
+      } catch (error) {
+        console.log('🔄 BLE Manager destroyed, reinitializing...');
+        const success = await this.reinitialize();
+        if (!success) {
+          return [];
+        }
+        state = await this.manager.state();
+      }
+
       if (state !== 'PoweredOn') {
         Alert.alert('Bluetooth Disabled', 'Please enable Bluetooth to scan for devices.', [{ text: 'OK' }]);
         return [];
@@ -202,6 +245,18 @@ export class BluetoothWaterService {
       console.log(`🔗 Connecting to device: ${deviceId}`);
       this.isConnecting = true;
       this.stopScanning();
+
+      // Check if manager is destroyed and reinitialize if needed
+      try {
+        await this.manager.state();
+      } catch (error) {
+        console.log('🔄 BLE Manager destroyed, reinitializing...');
+        const success = await this.reinitialize();
+        if (!success) {
+          this.isConnecting = false;
+          return false;
+        }
+      }
 
       // Connect to device
       this.device = await this.manager.connectToDevice(deviceId, {
@@ -281,9 +336,11 @@ export class BluetoothWaterService {
 
           const sensorData = this.parseReceivedData(rawData);
           if (sensorData) {
-            // Calculate water level using calibration service if available
-            let waterLevel = 0;
-            if (calibrationService.isDeviceCalibrated()) {
+            // Calculate water level using calibration service if needed
+            let waterLevel = sensorData.waterLevel;
+            
+            // If waterLevel is 0 and we have calibration, calculate it
+            if (waterLevel === 0 && calibrationService.isDeviceCalibrated()) {
               waterLevel = calibrationService.calculateWaterLevel(sensorData);
             }
 
@@ -296,7 +353,9 @@ export class BluetoothWaterService {
               calibrationService.addCalibrationReading(sensorData.distance);
             }
 
-            this.notifyDataListeners(sensorData);
+            // Update the sensor data with calculated water level
+            const finalSensorData = { ...sensorData, waterLevel };
+            this.notifyDataListeners(finalSensorData);
           }
         } catch (parseError) {
           console.error('❌ Failed to parse received data:', parseError);
@@ -308,12 +367,27 @@ export class BluetoothWaterService {
   }
 
   // Parse data received from IoT device
-  // ESP32 sends: {"distance":123,"timestamp":456,"device":"SmartWaterBottle","status":"ok"}
+  // ESP32 sends various formats: {"p":75,"d":49}, {"distance":123}, or raw numbers
   private parseReceivedData(rawData: string): SensorData | null {
     try {
       const json = JSON.parse(rawData);
 
-      // Expected format from our simplified ESP32 code
+      // Handle format: {"p": percentage, "d": distance}
+      if (typeof json.p !== 'undefined' && typeof json.d !== 'undefined') {
+        const percentage = Number(json.p);
+        const distance = Number(json.d);
+        if (!Number.isNaN(percentage) && !Number.isNaN(distance)) {
+          return {
+            distance: distance,
+            waterLevel: percentage, // Already a percentage (0-100)
+            timestamp: Date.now(),
+            device: DEVICE_NAME,
+            status: 'ok',
+          };
+        }
+      }
+
+      // Handle format: {"distance": 123, ...}
       if (typeof json.distance !== 'undefined') {
         return {
           distance: Number(json.distance),

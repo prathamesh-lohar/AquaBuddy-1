@@ -15,6 +15,10 @@ Notifications.setNotificationHandler({
 export class NotificationService {
   private static instance: NotificationService;
   private isInitialized = false;
+  private lastEmptyNotification = 0;
+  private lastLowWaterNotification = 0;
+  private readonly EMPTY_NOTIFICATION_INTERVAL = 5 * 60 * 1000; // 5 minutes
+  private readonly LOW_WATER_NOTIFICATION_INTERVAL = 10 * 60 * 1000; // 10 minutes
 
   static getInstance(): NotificationService {
     if (!NotificationService.instance) {
@@ -176,6 +180,66 @@ export class NotificationService {
       console.log('Calibration reminder notification sent');
     } catch (error) {
       console.error('Error sending calibration reminder notification:', error);
+    }
+  }
+
+  async sendLowWaterNotification(waterLevel: number): Promise<void> {
+    try {
+      const now = Date.now();
+      if (now - this.lastLowWaterNotification < this.LOW_WATER_NOTIFICATION_INTERVAL) {
+        console.log('⏰ Low water notification throttled - too soon since last notification');
+        return;
+      }
+
+      if (!this.isInitialized) {
+        const initialized = await this.initialize();
+        if (!initialized) return;
+      }
+
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: '⚠️ Low Water Alert',
+          body: `Your bottle is at ${Math.round(waterLevel)}% capacity. Time to refill!`,
+          sound: 'default',
+          data: { type: 'low_water', waterLevel },
+        },
+        trigger: null,
+      });
+
+      this.lastLowWaterNotification = now;
+      console.log('Low water notification sent');
+    } catch (error) {
+      console.error('Error sending low water notification:', error);
+    }
+  }
+
+  async sendEmptyBottleNotification(): Promise<void> {
+    try {
+      const now = Date.now();
+      if (now - this.lastEmptyNotification < this.EMPTY_NOTIFICATION_INTERVAL) {
+        console.log('⏰ Empty notification throttled - too soon since last notification');
+        return;
+      }
+
+      if (!this.isInitialized) {
+        const initialized = await this.initialize();
+        if (!initialized) return;
+      }
+
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: '🚰 Bottle Empty!',
+          body: 'Your water bottle is empty. Please refill it to stay hydrated!',
+          sound: 'default',
+          data: { type: 'empty_bottle' },
+        },
+        trigger: null,
+      });
+
+      this.lastEmptyNotification = now;
+      console.log('Empty bottle notification sent');
+    } catch (error) {
+      console.error('Error sending empty bottle notification:', error);
     }
   }
 

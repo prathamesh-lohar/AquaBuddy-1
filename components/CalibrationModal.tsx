@@ -29,32 +29,90 @@ export const CalibrationModal: React.FC<CalibrationModalProps> = ({
   const [isCalibrating, setIsCalibrating] = useState(false);
   const [readingCount, setReadingCount] = useState(0);
   const [emptyBaseline, setEmptyBaseline] = useState<number>(0);
+  const [isEmptyCalibrated, setIsEmptyCalibrated] = useState(false);
+  const [isFullCalibrated, setIsFullCalibrated] = useState(false);
+
+  // Check calibration status when modal opens
+  useEffect(() => {
+    if (visible) {
+      setIsEmptyCalibrated(calibrationService.isEmptyCalibrated());
+      setIsFullCalibrated(calibrationService.isFullCalibrated());
+    }
+  }, [visible]);
 
   useEffect(() => {
     if (visible && sensorData && calibrationService.isCalibrationInProgress()) {
       const step = calibrationService.getCurrentStep();
       setCurrentStep(step);
       
+      console.log(`📊 Adding reading for ${step}: ${sensorData.distance}mm`);
+      
       // Add sensor reading to calibration
       calibrationService.addCalibrationReading(sensorData.distance);
-      setReadingCount(prev => prev + 1);
+      
+      // Increment reading count
+      setReadingCount(prev => {
+        const newCount = prev + 1;
+        console.log(`📊 Reading count for ${step}: ${newCount}/10`);
+        return newCount;
+      });
 
-      // Check if calibration is complete
+      // Check if calibration step is complete
       if (!calibrationService.isCalibrationInProgress() && step !== 'none') {
         const calibrationData = calibrationService.getCalibrationData();
-        if (calibrationData && calibrationData.isCalibrated) {
-          onComplete(calibrationData);
-          handleClose();
+        console.log('🔧 Calibration step completed:', step, calibrationData);
+        
+        if (calibrationData) {
+          if (step === 'empty') {
+            setIsEmptyCalibrated(calibrationService.isEmptyCalibrated());
+            setCurrentStep('none');
+            setIsCalibrating(false);
+            setReadingCount(0);
+            Alert.alert('Empty Calibration Complete! ✅', 'Empty bottle calibrated successfully!');
+          } else if (step === 'full') {
+            setIsFullCalibrated(calibrationService.isFullCalibrated());
+            
+            if (calibrationData.isCalibrated) {
+              Alert.alert('Full Calibration Complete! ✅', 'Full bottle calibrated successfully!');
+              setTimeout(() => {
+                onComplete(calibrationData);
+                handleClose();
+              }, 1000);
+            } else {
+              Alert.alert('Calibration Failed ❌', 'Full calibration failed. Please try again.');
+              setCurrentStep('none');
+              setIsCalibrating(false);
+              setReadingCount(0);
+            }
+          }
         }
       }
     }
   }, [sensorData, visible]);
 
-  const startCalibration = () => {
+  const startEmptyCalibration = () => {
     setIsCalibrating(true);
     setReadingCount(0);
     calibrationService.startCalibration();
     setCurrentStep('empty');
+  };
+
+  const startFullCalibration = () => {
+    if (!isEmptyCalibrated) {
+      Alert.alert(
+        'Empty Calibration Required',
+        'Please calibrate the empty bottle first before calibrating the full bottle.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+    
+    console.log('🔧 Starting full calibration...');
+    setIsCalibrating(true);
+    setReadingCount(0); // Reset reading count for full calibration
+    calibrationService.startFullCalibration();
+    setCurrentStep('full');
+    console.log('📱 UI updated to full step');
   };
 
   const handleClose = () => {
@@ -63,6 +121,8 @@ export const CalibrationModal: React.FC<CalibrationModalProps> = ({
     setCurrentStep('none');
     setReadingCount(0);
     setEmptyBaseline(0);
+    setIsEmptyCalibrated(false);
+    setIsFullCalibrated(false);
     onClose();
   };
 
@@ -84,6 +144,7 @@ export const CalibrationModal: React.FC<CalibrationModalProps> = ({
         );
 
       case 'full':
+        console.log('🖥️ Rendering full calibration step');
         return (
           <View style={styles.stepContainer}>
             <Ionicons name="flask" size={64} color="#4ECDC4" />
@@ -92,27 +153,76 @@ export const CalibrationModal: React.FC<CalibrationModalProps> = ({
               Fill your water bottle to 100% capacity and place it back on the surface.
             </Text>
             <Text style={styles.readingCounter}>
-              Readings collected: {readingCount - 10}/10
+              Readings collected: {readingCount}/10
             </Text>
             <ActivityIndicator size="large" color="#4A90E2" style={styles.spinner} />
           </View>
         );
 
       default:
+        console.log(`🖥️ Rendering default step, currentStep: ${currentStep}, isCalibrating: ${isCalibrating}`);
         return (
           <View style={styles.stepContainer}>
             <Ionicons name="settings-outline" size={64} color="#4A90E2" />
             <Text style={styles.stepTitle}>Device Calibration</Text>
             <Text style={styles.stepDescription}>
-              Calibrate your smart water bottle for accurate tracking. This process will take about 30 seconds.
+              Calibrate your smart water bottle for accurate tracking. Follow the steps below:
             </Text>
             
-            <TouchableOpacity
-              style={styles.startButton}
-              onPress={startCalibration}
-            >
-              <Text style={styles.startButtonText}>Start Calibration</Text>
-            </TouchableOpacity>
+            {/* Current Status Display */}
+            <View style={styles.calibrationStatus}>
+              <Text style={styles.statusTitle}>Calibration Status</Text>
+              <View style={styles.statusRow}>
+                <Text style={styles.statusLabel}>Empty Bottle:</Text>
+                <Text style={[styles.statusValue, isEmptyCalibrated ? styles.statusComplete : styles.statusPending]}>
+                  {isEmptyCalibrated ? '✅ Calibrated' : '⏳ Pending'}
+                </Text>
+              </View>
+              <View style={styles.statusRow}>
+                <Text style={styles.statusLabel}>Full Bottle:</Text>
+                <Text style={[styles.statusValue, isFullCalibrated ? styles.statusComplete : styles.statusPending]}>
+                  {isFullCalibrated ? '✅ Calibrated' : '⏳ Pending'}
+                </Text>
+              </View>
+            </View>
+            
+            <View style={styles.calibrationSteps}>
+              <View style={styles.calibrationStep}>
+                <Text style={styles.stepNumber}>1.</Text>
+                <Text style={styles.stepText}>Empty your bottle completely</Text>
+                <TouchableOpacity
+                  style={[styles.calibrationStepButton, isEmptyCalibrated && styles.completedButton]}
+                  onPress={startEmptyCalibration}
+                  disabled={isCalibrating}
+                >
+                  <Text style={[styles.calibrationStepButtonText, isEmptyCalibrated && styles.completedButtonText]}>
+                    {isEmptyCalibrated ? '✅ Empty Done' : '📏 Calibrate Empty'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.calibrationStep}>
+                {/* <Text style={styles.stepNumber}>2.</Text> */}
+                {/* <Text style={styles.stepText}>Fill your bottle to 100%</Text> */}
+                {/* <TouchableOpacity
+                  style={[
+                    styles.calibrationStepButton, 
+                    (!isEmptyCalibrated || isFullCalibrated) && styles.disabledButton,
+                    isFullCalibrated && styles.completedButton
+                  ]}
+                  onPress={startFullCalibration}
+                  disabled={!isEmptyCalibrated || isCalibrating || isFullCalibrated}
+                > */}
+                  {/* <Text style={[
+                    styles.calibrationStepButtonText,
+                    (!isEmptyCalibrated || isFullCalibrated) && styles.disabledButtonText,
+                    isFullCalibrated && styles.completedButtonText
+                  ]}>
+                    {isFullCalibrated ? '✅ Full Done' : '📏 Calibrate Full'}
+                  </Text> */}
+                {/* </TouchableOpacity> */}
+              </View>
+            </View>
           </View>
         );
     }
@@ -224,5 +334,89 @@ const styles = StyleSheet.create({
   footerText: {
     fontSize: 12,
     color: '#999',
+  },
+  // New calibration step styles
+  calibrationSteps: {
+    width: '100%',
+    gap: 20,
+    marginTop: 20,
+  },
+  calibrationStep: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    backgroundColor: '#F8F9FA',
+    borderRadius: 12,
+    gap: 12,
+  },
+  stepNumber: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#4A90E2',
+    width: 30,
+  },
+  stepText: {
+    flex: 1,
+    fontSize: 16,
+    color: '#333',
+  },
+  calibrationStepButton: {
+    backgroundColor: '#4A90E2',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  calibrationStepButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  completedButton: {
+    backgroundColor: '#4CAF50',
+  },
+  completedButtonText: {
+    color: '#fff',
+  },
+  disabledButton: {
+    backgroundColor: '#E0E0E0',
+  },
+  disabledButtonText: {
+    color: '#999',
+  },
+  // Status display styles
+  calibrationStatus: {
+    width: '100%',
+    backgroundColor: '#F8F9FA',
+    borderRadius: 12,
+    padding: 16,
+    marginVertical: 20,
+  },
+  statusTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  statusRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  statusLabel: {
+    fontSize: 14,
+    color: '#666',
+    fontWeight: '500',
+  },
+  statusValue: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  statusComplete: {
+    color: '#4CAF50',
+  },
+  statusPending: {
+    color: '#FF9800',
   },
 });

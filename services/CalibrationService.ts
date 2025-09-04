@@ -34,6 +34,14 @@ export class CalibrationService {
     return this.calibrationData?.isCalibrated || false;
   }
 
+  isEmptyCalibrated(): boolean {
+    return this.calibrationData?.emptyBaseline != null && this.calibrationData.emptyBaseline > 0;
+  }
+
+  isFullCalibrated(): boolean {
+    return this.calibrationData?.fullBaseline != null && this.calibrationData.fullBaseline > 0;
+  }
+
   getCalibrationData(): DeviceCalibration | null {
     return this.calibrationData;
   }
@@ -41,6 +49,18 @@ export class CalibrationService {
   startCalibration(): void {
     this.isCalibrating = true;
     this.calibrationStep = 'empty';
+    this.calibrationReadings = [];
+  }
+
+  startEmptyCalibration(): void {
+    this.isCalibrating = true;
+    this.calibrationStep = 'empty';
+    this.calibrationReadings = [];
+  }
+
+  startFullCalibration(): void {
+    this.isCalibrating = true;
+    this.calibrationStep = 'full';
     this.calibrationReadings = [];
   }
 
@@ -72,37 +92,62 @@ export class CalibrationService {
   private processCalibrationStep(): void {
     if (this.calibrationReadings.length === 0) return;
 
-    // Calculate average distance from readings
-    const avgDistance = this.calibrationReadings.reduce((sum, reading) => sum + reading, 0) / this.calibrationReadings.length;
-
     if (this.calibrationStep === 'empty') {
-      // Save empty baseline and move to full step
+      // For empty bottle, take the MAXIMUM distance (furthest from sensor)
+      const maxDistance = Math.max(...this.calibrationReadings);
+      
+      console.log(`📏 Empty calibration: Max distance = ${maxDistance}mm from ${this.calibrationReadings.length} readings`);
+      
       if (!this.calibrationData) {
         this.calibrationData = {
-          emptyBaseline: avgDistance,
+          emptyBaseline: maxDistance,
           fullBaseline: 0,
           bottleCapacity: 1000, // Default 1L capacity
           calibrationDate: new Date().toISOString(),
           isCalibrated: false,
         };
       } else {
-        this.calibrationData.emptyBaseline = avgDistance;
+        this.calibrationData.emptyBaseline = maxDistance;
       }
 
-      this.calibrationStep = 'full';
-      this.calibrationReadings = [];
+      // Don't automatically move to full step - stop here
+      this.stopCalibration();
+      
     } else if (this.calibrationStep === 'full') {
-      // Save full baseline and complete calibration
-      if (this.calibrationData) {
-        this.calibrationData.fullBaseline = avgDistance;
-        this.calibrationData.calibrationDate = new Date().toISOString();
-        this.calibrationData.isCalibrated = true;
+      // For full bottle, take the MINIMUM distance (closest to sensor - water surface)
+      const minDistance = Math.min(...this.calibrationReadings);
+      
+      console.log(`📏 Full calibration: Min distance = ${minDistance}mm from ${this.calibrationReadings.length} readings`);
+      
+      if (!this.calibrationData) {
+        // If no empty calibration exists, create with default
+        this.calibrationData = {
+          emptyBaseline: 0,
+          fullBaseline: minDistance,
+          bottleCapacity: 1000,
+          calibrationDate: new Date().toISOString(),
+          isCalibrated: false,
+        };
+      } else {
+        this.calibrationData.fullBaseline = minDistance;
+      }
+      
+      // Check if both calibrations are done
+      if (this.calibrationData.emptyBaseline > 0 && this.calibrationData.fullBaseline > 0) {
+        // Validate calibration makes sense
+        if (this.calibrationData.emptyBaseline <= minDistance) {
+          console.error(`❌ Invalid calibration: Empty (${this.calibrationData.emptyBaseline}mm) should be > Full (${minDistance}mm)`);
+          this.calibrationData.isCalibrated = false;
+        } else {
+          this.calibrationData.isCalibrated = true;
+          console.log(`✅ Calibration complete: Empty=${this.calibrationData.emptyBaseline}mm, Full=${this.calibrationData.fullBaseline}mm`);
+        }
         
         // Save calibration data
         this.saveCalibration(this.calibrationData);
       }
 
-      // Complete calibration
+      // Complete this step
       this.stopCalibration();
     }
   }
@@ -117,15 +162,21 @@ export class CalibrationService {
 
     // Handle edge cases
     if (distance <= fullBaseline) {
+      console.log(`📊 Water level: 100% (distance ${distance}mm <= full ${fullBaseline}mm)`);
       return 100; // 100% full
     }
     if (distance >= emptyBaseline) {
+      console.log(`📊 Water level: 0% (distance ${distance}mm >= empty ${emptyBaseline}mm)`);
       return 0; // 0% empty
     }
 
     // Linear interpolation between full and empty
     const waterLevel = ((emptyBaseline - distance) / (emptyBaseline - fullBaseline)) * 100;
-    return Math.max(0, Math.min(100, waterLevel)); // Clamp between 0-100%
+    const clampedLevel = Math.max(0, Math.min(100, waterLevel));
+    
+    console.log(`📊 Water level: ${clampedLevel.toFixed(1)}% (distance ${distance}mm between empty ${emptyBaseline}mm and full ${fullBaseline}mm)`);
+    
+    return clampedLevel;
   }
 
   calculateWaterVolume(sensorData: SensorData): number {
