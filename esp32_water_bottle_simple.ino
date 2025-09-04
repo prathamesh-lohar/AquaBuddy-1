@@ -47,7 +47,7 @@ class MyCharacteristicCallbacks: public BLECharacteristicCallbacks {
         }
         Serial.println();
         
-        // Simple command handling - app will handle calibration logic
+        // Simple command handling - app will handle all logic
         String command = String(rxValue.c_str());
         command.trim();
         
@@ -207,207 +207,16 @@ void readSensorAndSendData() {
   }
 }
 
-// Optional: Handle incoming data from React Native app
-void onCharacteristicWrite(BLECharacteristic* pCharacteristic) {
-  std::string rxValue = pCharacteristic->getValue();
-
-  if (rxValue.length() > 0) {
-    Serial.println("📨 Received from app: ");
-    for (int i = 0; i < rxValue.length(); i++) {
-      Serial.print(rxValue[i]);
-    }
-    Serial.println();
-    
-    // Parse calibration commands
-    String command = String(rxValue.c_str());
-    command.trim();
-    
-    if (command == "calibrate_empty") {
-      calibrateEmpty();
-    } else if (command == "calibrate_full") {
-      calibrateFull();
-    } else if (command == "reset_calibration") {
-      resetCalibration();
-    } else if (command == "get_status") {
-      sendDeviceStatus();
-    } else {
-      Serial.println("❓ Unknown command: " + command);
-    }
-  }
-}
-
-// Calibration Functions
-void loadCalibrationData() {
-  Serial.println("📋 Loading calibration data from EEPROM...");
-  
-  // Check if calibration data exists
-  int calibrationFlag = EEPROM.read(CALIBRATION_FLAG_ADDR);
-  
-  if (calibrationFlag == 1) {
-    // Load calibration values
-    EEPROM.get(EMPTY_BASELINE_ADDR, emptyBaseline);
-    EEPROM.get(FULL_BASELINE_ADDR, fullBaseline);
-    
-    // Validate calibration data
-    if (emptyBaseline > fullBaseline && emptyBaseline > 0 && fullBaseline > 0) {
-      isCalibrated = true;
-      Serial.println("✅ Calibration data loaded:");
-      Serial.println("   Empty Baseline: " + String(emptyBaseline) + "mm");
-      Serial.println("   Full Baseline: " + String(fullBaseline) + "mm");
-    } else {
-      Serial.println("⚠️ Invalid calibration data, resetting...");
-      resetCalibration();
-    }
-  } else {
-    Serial.println("ℹ️ No calibration data found - device needs calibration");
-    isCalibrated = false;
-  }
-}
-
-void saveCalibrationData() {
-  Serial.println("💾 Saving calibration data to EEPROM...");
-  
-  EEPROM.put(EMPTY_BASELINE_ADDR, emptyBaseline);
-  EEPROM.put(FULL_BASELINE_ADDR, fullBaseline);
-  EEPROM.write(CALIBRATION_FLAG_ADDR, 1);
-  EEPROM.commit();
-  
-  Serial.println("✅ Calibration data saved");
-}
-
-void calibrateEmpty() {
-  Serial.println("🔧 Starting empty bottle calibration...");
-  
-  // Take multiple readings for accuracy
-  float totalDistance = 0;
-  int validReadings = 0;
-  
-  for (int i = 0; i < 10; i++) {
-    VL53L0X_RangingMeasurementData_t measure;
-    lox.rangingTest(&measure, false);
-    
-    if (measure.RangeStatus != 4) {
-      totalDistance += measure.RangeMilliMeter;
-      validReadings++;
-    }
-    delay(100);
-  }
-  
-  if (validReadings >= 5) {
-    emptyBaseline = totalDistance / validReadings;
-    Serial.println("✅ Empty calibration complete: " + String(emptyBaseline) + "mm");
-    
-    // Check if we have both calibrations
-    if (fullBaseline > 0 && emptyBaseline > fullBaseline) {
-      isCalibrated = true;
-      saveCalibrationData();
-      sendCalibrationStatus();
-    }
-  } else {
-    Serial.println("❌ Empty calibration failed - insufficient valid readings");
-    sendCalibrationError("empty_calibration_failed");
-  }
-}
-
-void calibrateFull() {
-  Serial.println("🔧 Starting full bottle calibration...");
-  
-  // Take multiple readings for accuracy
-  float totalDistance = 0;
-  int validReadings = 0;
-  
-  for (int i = 0; i < 10; i++) {
-    VL53L0X_RangingMeasurementData_t measure;
-    lox.rangingTest(&measure, false);
-    
-    if (measure.RangeStatus != 4) {
-      totalDistance += measure.RangeMilliMeter;
-      validReadings++;
-    }
-    delay(100);
-  }
-  
-  if (validReadings >= 5) {
-    fullBaseline = totalDistance / validReadings;
-    Serial.println("✅ Full calibration complete: " + String(fullBaseline) + "mm");
-    
-    // Check if we have both calibrations
-    if (emptyBaseline > 0 && emptyBaseline > fullBaseline) {
-      isCalibrated = true;
-      saveCalibrationData();
-      sendCalibrationStatus();
-    }
-  } else {
-    Serial.println("❌ Full calibration failed - insufficient valid readings");
-    sendCalibrationError("full_calibration_failed");
-  }
-}
-
-void resetCalibration() {
-  Serial.println("🔄 Resetting calibration...");
-  
-  emptyBaseline = 0;
-  fullBaseline = 0;
-  isCalibrated = false;
-  
-  // Clear EEPROM
-  EEPROM.write(CALIBRATION_FLAG_ADDR, 0);
-  EEPROM.commit();
-  
-  Serial.println("✅ Calibration reset complete");
-  sendCalibrationStatus();
-}
-
-void sendCalibrationStatus() {
-  if (!deviceConnected) return;
-  
-  DynamicJsonDocument doc(300);
-  doc["type"] = "calibration_status";
-  doc["isCalibrated"] = isCalibrated;
-  doc["emptyBaseline"] = emptyBaseline;
-  doc["fullBaseline"] = fullBaseline;
-  doc["timestamp"] = millis();
-  doc["device"] = DEVICE_NAME;
-  
-  String jsonString;
-  serializeJson(doc, jsonString);
-  
-  pCharacteristic->setValue(jsonString.c_str());
-  pCharacteristic->notify();
-  
-  Serial.println("� Calibration status sent: " + jsonString);
-}
-
-void sendCalibrationError(String errorType) {
-  if (!deviceConnected) return;
-  
-  DynamicJsonDocument doc(250);
-  doc["type"] = "calibration_error";
-  doc["error"] = errorType;
-  doc["timestamp"] = millis();
-  doc["device"] = DEVICE_NAME;
-  
-  String jsonString;
-  serializeJson(doc, jsonString);
-  
-  pCharacteristic->setValue(jsonString.c_str());
-  pCharacteristic->notify();
-  
-  Serial.println("📤 Calibration error sent: " + jsonString);
-}
-
 void sendDeviceStatus() {
   if (!deviceConnected) return;
   
-  DynamicJsonDocument doc(400);
+  DynamicJsonDocument doc(200);
   doc["type"] = "device_status";
-  doc["isCalibrated"] = isCalibrated;
-  doc["emptyBaseline"] = emptyBaseline;
-  doc["fullBaseline"] = fullBaseline;
   doc["uptime"] = millis();
   doc["freeHeap"] = ESP.getFreeHeap();
   doc["device"] = DEVICE_NAME;
   doc["timestamp"] = millis();
+  doc["status"] = "ok";
   
   String jsonString;
   serializeJson(doc, jsonString);

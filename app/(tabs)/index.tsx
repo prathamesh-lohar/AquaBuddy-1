@@ -29,9 +29,13 @@ import { WaterBottle } from '../../components/WaterBottle';
 import { ProgressBar } from '../../components/ProgressBar';
 import { StatCard } from '../../components/StatCard';
 import { TipCard } from '../../components/TipCard';
+import { CalibrationModal } from '../../components/CalibrationModal';
+import { NotifyButton } from '../../components/NotifyButton';
 
 import { Colors, Typography, Spacing } from '../../constants/theme';
 import { getMotivationalTip, formatWaterAmount } from '../../utils/waterUtils';
+import { calibrationService } from '../../services/CalibrationService';
+import { notificationService } from '../../services/NotificationService';
 
 // IoT Bottle sizes in ml
 const BOTTLE_SIZES = [
@@ -56,13 +60,13 @@ export default function HomeScreen() {
     currentDistance,
     lastUpdateTime,
     isDataFresh,
+    sensorData,
     scanForDevices,
     stopScanning,
     selectDevice,
     connectToDevice,
     disconnectDevice,
     getDiagnostics,
-    forceReinitialize,
   } = useBluetoothWater();
   
   // Fallback simulation when Bluetooth is not connected
@@ -78,7 +82,35 @@ export default function HomeScreen() {
   const [currentTip, setCurrentTip] = useState(getMotivationalTip());
   const [previousWaterLevel, setPreviousWaterLevel] = useState(currentWaterLevel);
   const [showDeviceSelector, setShowDeviceSelector] = useState(false);
-  // Fallback simulation when not connected to Bluetooth
+  const [showCalibrationModal, setShowCalibrationModal] = useState(false);
+  const [isCalibrated, setIsCalibrated] = useState(false);
+
+  // Initialize calibration service
+  useEffect(() => {
+    const initCalibration = async () => {
+      await calibrationService.loadCalibration();
+      setIsCalibrated(calibrationService.isDeviceCalibrated());
+    };
+    initCalibration();
+  }, []);
+
+  // Initialize notification service
+  useEffect(() => {
+    notificationService.initialize();
+  }, []);
+  // Check for calibration needed when device connects
+  useEffect(() => {
+    if (isConnected && !isCalibrated) {
+      Alert.alert(
+        'Device Calibration Required',
+        'Your smart water bottle needs to be calibrated for accurate tracking. Would you like to calibrate it now?',
+        [
+          { text: 'Later', style: 'cancel' },
+          { text: 'Calibrate Now', onPress: () => setShowCalibrationModal(true) },
+        ]
+      );
+    }
+  }, [isConnected, isCalibrated]);
   useEffect(() => {
     if (isConnected) return; // Skip simulation if Bluetooth is connected
 
@@ -171,19 +203,32 @@ export default function HomeScreen() {
     }
   };
 
+  const handleCalibrationComplete = async (calibration: any) => {
+    setIsCalibrated(true);
+    Alert.alert(
+      'Calibration Complete! ✅',
+      `Your water bottle has been calibrated successfully. 
+      
+Empty: ${calibration.emptyBaseline.toFixed(1)}mm
+Full: ${calibration.fullBaseline.toFixed(1)}mm
+Capacity: ${calibration.bottleCapacity}ml`,
+      [{ text: 'OK' }]
+    );
+  };
+
   const handleForceReinitialize = async () => {
     Alert.alert(
-      'Force Reinitialize BLE',
-      'This will restart the Bluetooth manager. Continue?',
+      'Force Disconnect',
+      'This will disconnect the current device. Continue?',
       [
         { text: 'Cancel', style: 'cancel' },
         { 
-          text: 'Restart', 
+          text: 'Disconnect', 
           onPress: async () => {
-            const success = await forceReinitialize();
+            await disconnectDevice();
             Alert.alert(
-              success ? 'Success' : 'Failed',
-              success ? 'BLE Manager reinitialized successfully' : 'Failed to reinitialize BLE Manager',
+              'Disconnected',
+              'Device has been disconnected successfully',
               [{ text: 'OK' }]
             );
           }
@@ -298,7 +343,7 @@ export default function HomeScreen() {
       <StatusBar style="dark" />
       
       <LinearGradient
-        colors={Colors.background.gradient}
+        colors={['#E3F2FD', '#FFFFFF']}
         style={styles.gradient}
       >
         <ScrollView
@@ -372,6 +417,24 @@ export default function HomeScreen() {
             <Text style={styles.progressText}>
               {Math.round(progressPercentage)}% of daily goal achieved
             </Text>
+          </View>
+
+          {/* Notification Button */}
+          <View style={styles.notificationContainer}>
+            <Text style={styles.sectionTitle}>Quick Actions</Text>
+            <View style={styles.quickActionsRow}>
+              <NotifyButton />
+              {isConnected && (
+                <TouchableOpacity
+                  style={styles.calibrateButton}
+                  onPress={() => setShowCalibrationModal(true)}
+                >
+                  <Text style={styles.calibrateButtonText}>
+                    {isCalibrated ? '🔧 Recalibrate' : '⚙️ Calibrate Device'}
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
 
           {/* IoT Device Info & Controls */}
@@ -471,7 +534,7 @@ export default function HomeScreen() {
                   style={[styles.diagnosticButton, styles.warningButton]}
                   onPress={handleForceReinitialize}
                 >
-                  <Text style={styles.diagnosticButtonText}>🔄 Reset BLE</Text>
+                  <Text style={styles.diagnosticButtonText}>� Disconnect</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -575,6 +638,14 @@ export default function HomeScreen() {
           {/* Bottom Spacing */}
           <View style={styles.bottomSpacing} />
         </ScrollView>
+
+        {/* Calibration Modal */}
+        <CalibrationModal
+          visible={showCalibrationModal}
+          onClose={() => setShowCalibrationModal(false)}
+          onComplete={handleCalibrationComplete}
+          sensorData={sensorData}
+        />
       </LinearGradient>
     </SafeAreaView>
   );
@@ -933,5 +1004,31 @@ const styles = StyleSheet.create({
   },
   bottomSpacing: {
     height: Spacing.xxl,
+  },
+  // Notification and Quick Actions Styles
+  notificationContainer: {
+    paddingHorizontal: Spacing.lg,
+    marginBottom: Spacing.xl,
+  },
+  quickActionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    gap: Spacing.md,
+  },
+  calibrateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FF9800',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 8,
+    flex: 1,
+    justifyContent: 'center',
+  },
+  calibrateButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });

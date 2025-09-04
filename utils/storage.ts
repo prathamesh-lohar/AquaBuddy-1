@@ -1,11 +1,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { WaterIntake, DayRecord, UserProfile } from '../types';
+import { WaterIntake, DayRecord, UserProfile, DeviceCalibration } from '../types';
 
 const KEYS = {
   USER_PROFILE: 'user_profile',
   WATER_INTAKES: 'water_intakes',
   DAILY_RECORDS: 'daily_records',
   STREAK_COUNT: 'streak_count',
+  DEVICE_CALIBRATION: 'device_calibration',
 };
 
 export const StorageService = {
@@ -123,6 +124,33 @@ export const StorageService = {
     } catch (error) {
       console.error('Error getting streak count:', error);
       return 0;
+    }
+  },
+
+  // Device Calibration
+  async saveDeviceCalibration(calibration: DeviceCalibration): Promise<void> {
+    try {
+      await AsyncStorage.setItem(KEYS.DEVICE_CALIBRATION, JSON.stringify(calibration));
+    } catch (error) {
+      console.error('Error saving device calibration:', error);
+    }
+  },
+
+  async getDeviceCalibration(): Promise<DeviceCalibration | null> {
+    try {
+      const data = await AsyncStorage.getItem(KEYS.DEVICE_CALIBRATION);
+      return data ? JSON.parse(data) : null;
+    } catch (error) {
+      console.error('Error getting device calibration:', error);
+      return null;
+    }
+  },
+
+  async clearDeviceCalibration(): Promise<void> {
+    try {
+      await AsyncStorage.removeItem(KEYS.DEVICE_CALIBRATION);
+    } catch (error) {
+      console.error('Error clearing device calibration:', error);
     }
   },
 };

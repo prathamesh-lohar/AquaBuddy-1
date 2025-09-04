@@ -22,6 +22,22 @@ export interface UserProfile {
   reminderInterval: number; // hours
 }
 
+export interface DeviceCalibration {
+  emptyBaseline: number;
+  fullBaseline: number;
+  bottleCapacity: number; // in ml
+  calibrationDate: string;
+  isCalibrated: boolean;
+}
+
+export interface SensorData {
+  distance: number;
+  waterLevel: number; // calculated percentage
+  timestamp: number;
+  device: string;
+  status: string;
+}
+
 export interface Challenge {
   id: string;
   title: string;

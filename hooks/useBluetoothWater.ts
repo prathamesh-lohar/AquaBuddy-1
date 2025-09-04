@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
-import { BluetoothWaterService, WaterLevelData, BluetoothDevice } from '../services/BluetoothWaterService';
+import { BluetoothWaterService, BluetoothDevice } from '../services/BluetoothWaterService';
+import { SensorData } from '../types';
 import { useAuth } from '../providers/auth-provider';
 
 export const useBluetoothWater = () => {
@@ -9,7 +10,7 @@ export const useBluetoothWater = () => {
   const [isScanning, setIsScanning] = useState(false);
   const [availableDevices, setAvailableDevices] = useState<BluetoothDevice[]>([]);
   const [selectedDevice, setSelectedDevice] = useState<BluetoothDevice | null>(null);
-  const [waterLevelData, setWaterLevelData] = useState<WaterLevelData | null>(null);
+  const [sensorData, setSensorData] = useState<SensorData | null>(null);
   const [lastUpdateTime, setLastUpdateTime] = useState<number>(0);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   
@@ -30,8 +31,8 @@ export const useBluetoothWater = () => {
         }
 
         // Set up listeners
-        const handleDataReceived = (data: WaterLevelData) => {
-          setWaterLevelData(data);
+        const handleDataReceived = (data: SensorData) => {
+          setSensorData(data);
           setLastUpdateTime(data.timestamp);
           setConnectionError(null);
         };
@@ -164,11 +165,11 @@ export const useBluetoothWater = () => {
   };
 
   const getCurrentWaterLevel = (): number => {
-    return waterLevelData?.waterLevel || 0;
+    return sensorData?.waterLevel || 0;
   };
 
   const getCurrentDistance = (): number => {
-    return waterLevelData?.distance || 0;
+    return sensorData?.distance || 0;
   };
 
   const getTimeSinceLastUpdate = (): number => {
@@ -208,7 +209,7 @@ export const useBluetoothWater = () => {
     selectedDevice,
     
     // Data
-    waterLevelData,
+    sensorData,
     currentWaterLevel: getCurrentWaterLevel(),
     currentDistance: getCurrentDistance(),
     lastUpdateTime,
@@ -222,6 +223,5 @@ export const useBluetoothWater = () => {
     connectToDevice,
     disconnectDevice,
     getDiagnostics,
-    forceReinitialize,
   };
 };

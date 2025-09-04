@@ -1,7 +1,9 @@
 // BluetoothWaterService.ts
 import { BleManager, Device, Characteristic, State } from 'react-native-ble-plx';
 import { Platform, Alert, PermissionsAndroid } from 'react-native';
-import { decode as atob } from 'base-64'; // ✅ Fix: use base-64 (no Buffer globally in RN)
+import { decode as atob } from 'base-64';
+import { SensorData } from '../types';
+import { calibrationService } from './CalibrationService';
 
 // IoT device configuration - Match your ESP32 code
 const SERVICE_UUID = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
@@ -31,7 +33,7 @@ export class BluetoothWaterService {
   private isConnecting = false;
 
   // Event listeners
-  private dataListeners: Array<(data: WaterLevelData) => void> = [];
+  private dataListeners: Array<(data: SensorData) => void> = [];
   private connectionListeners: Array<(connected: boolean) => void> = [];
   private deviceListeners: Array<(devices: BluetoothDevice[]) => void> = [];
   private scannedDevices: Map<string, BluetoothDevice> = new Map();
@@ -83,20 +85,18 @@ export class BluetoothWaterService {
       if (apiLevel >= 31) {
         // Android 12+ runtime BT permissions
         permissions.push(
-          PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-          PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT
+          'android.permission.BLUETOOTH_SCAN' as any,
+          'android.permission.BLUETOOTH_CONNECT' as any
         );
       } else {
-        // Older Android versions need location + classic BT (some OEMs still check these)
+        // Older Android versions need location
         permissions.push(
-          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-          PermissionsAndroid.PERMISSIONS.BLUETOOTH,
-          PermissionsAndroid.PERMISSIONS.BLUETOOTH_ADMIN
+          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION as any
         );
       }
 
       console.log('📋 Requesting Bluetooth permissions...');
-      const results = await PermissionsAndroid.requestMultiple(permissions);
+      const results = await PermissionsAndroid.requestMultiple(permissions as any);
 
       const allGranted = Object.values(results).every(
         (res) => res === PermissionsAndroid.RESULTS.GRANTED
@@ -276,15 +276,27 @@ export class BluetoothWaterService {
       if (characteristic?.value) {
         try {
           // BLE values are base64-encoded; decode to string
-          const rawData = atob(characteristic.value); // ✅ FIXED: no Buffer, use base-64
+          const rawData = atob(characteristic.value);
           console.log(`📨 Received data: ${rawData}`);
 
-          const waterData = this.parseReceivedData(rawData);
-          if (waterData) {
+          const sensorData = this.parseReceivedData(rawData);
+          if (sensorData) {
+            // Calculate water level using calibration service if available
+            let waterLevel = 0;
+            if (calibrationService.isDeviceCalibrated()) {
+              waterLevel = calibrationService.calculateWaterLevel(sensorData);
+            }
+
             console.log(
-              `💧 Water level: ${(waterData.waterLevel * 100).toFixed(1)}% (${waterData.distance}mm)`
+              `💧 Distance: ${sensorData.distance}mm, Water level: ${waterLevel.toFixed(1)}%`
             );
-            this.notifyDataListeners(waterData);
+
+            // Add to calibration if in progress
+            if (calibrationService.isCalibrationInProgress()) {
+              calibrationService.addCalibrationReading(sensorData.distance);
+            }
+
+            this.notifyDataListeners(sensorData);
           }
         } catch (parseError) {
           console.error('❌ Failed to parse received data:', parseError);
@@ -296,45 +308,31 @@ export class BluetoothWaterService {
   }
 
   // Parse data received from IoT device
-  // ESP32 sends: {"p":<percent 0..100>,"d":<distance mm>}
-  // Also supports fallback formats (legacy): {"distance":123} or "123"
-  private parseReceivedData(rawData: string): WaterLevelData | null {
-    // Try JSON first
+  // ESP32 sends: {"distance":123,"timestamp":456,"device":"SmartWaterBottle","status":"ok"}
+  private parseReceivedData(rawData: string): SensorData | null {
     try {
       const json = JSON.parse(rawData);
 
-      // Preferred (ESP32 current)
-      if (typeof json.p !== 'undefined' && typeof json.d !== 'undefined') {
-        const pct = Number(json.p);
-        const dist = Number(json.d);
-        if (!Number.isNaN(pct) && !Number.isNaN(dist)) {
-          return {
-            distance: dist,
-            waterLevel: Math.max(0, Math.min(1, pct / 100)), // normalize to 0..1
-            timestamp: Date.now(),
-          };
-        }
-      }
-
-      // Legacy JSON format support
+      // Expected format from our simplified ESP32 code
       if (typeof json.distance !== 'undefined') {
-        const dist = Number(json.distance);
-        if (!Number.isNaN(dist)) {
-          return {
-            distance: dist,
-            waterLevel: this.convertDistanceToWaterLevel(dist),
-            timestamp: json.timestamp || Date.now(),
-          };
-        }
+        return {
+          distance: Number(json.distance),
+          waterLevel: 0, // Will be calculated by calibration service
+          timestamp: json.timestamp || Date.now(),
+          device: json.device || DEVICE_NAME,
+          status: json.status || 'ok',
+        };
       }
     } catch {
-      // Not JSON, try raw distance
+      // Try raw distance number
       const dist = Number(String(rawData).trim());
       if (!Number.isNaN(dist)) {
         return {
           distance: dist,
-          waterLevel: this.convertDistanceToWaterLevel(dist),
+          waterLevel: 0,
           timestamp: Date.now(),
+          device: DEVICE_NAME,
+          status: 'ok',
         };
       }
     }
@@ -414,10 +412,10 @@ export class BluetoothWaterService {
   }
 
   // Event listener management
-  public addDataListener(callback: (data: WaterLevelData) => void) {
+  public addDataListener(callback: (data: SensorData) => void) {
     this.dataListeners.push(callback);
   }
-  public removeDataListener(callback: (data: WaterLevelData) => void) {
+  public removeDataListener(callback: (data: SensorData) => void) {
     this.dataListeners = this.dataListeners.filter((fn) => fn !== callback);
   }
 
@@ -436,7 +434,7 @@ export class BluetoothWaterService {
   }
 
   // Notify listeners
-  private notifyDataListeners(data: WaterLevelData) {
+  private notifyDataListeners(data: SensorData) {
     this.dataListeners.forEach((listener) => {
       try {
         listener(data);
@@ -502,15 +500,13 @@ export class BluetoothWaterService {
         lines.push(`Android API Level: ${apiLevel}`);
 
         if (apiLevel >= 31) {
-          const scanPerm = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN);
-          const connectPerm = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT);
+          const scanPerm = await PermissionsAndroid.check('android.permission.BLUETOOTH_SCAN' as any);
+          const connectPerm = await PermissionsAndroid.check('android.permission.BLUETOOTH_CONNECT' as any);
           lines.push(`BLUETOOTH_SCAN: ${scanPerm ? 'Granted' : 'Denied'}`);
           lines.push(`BLUETOOTH_CONNECT: ${connectPerm ? 'Granted' : 'Denied'}`);
         } else {
           const fineLoc = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION);
-          const bt = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.BLUETOOTH);
           lines.push(`ACCESS_FINE_LOCATION: ${fineLoc ? 'Granted' : 'Denied'}`);
-          lines.push(`BLUETOOTH: ${bt ? 'Granted' : 'Denied'}`);
         }
       }
     } catch (error) {
