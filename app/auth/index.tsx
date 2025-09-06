@@ -13,7 +13,7 @@ import {
   ScrollView,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useAuth } from "@/providers/auth-provider";
+import { useAuth } from "../../providers/auth-provider";
 import { Eye, EyeOff, Mail, Lock, User, Droplets } from "lucide-react-native";
 
 const { width } = Dimensions.get("window");
