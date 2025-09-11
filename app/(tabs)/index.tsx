@@ -68,6 +68,9 @@ export default function HomeScreen() {
     connectToDevice,
     disconnectDevice,
     getDiagnostics,
+    enterDeepSleep,
+    wakeUpDevice,
+    sendCommand,
   } = useBluetoothWater();
   
   // Fallback simulation when Bluetooth is not connected
@@ -76,6 +79,14 @@ export default function HomeScreen() {
   // Use app-side calibration if available, otherwise use ESP32 percentage
   const currentWaterLevel = (() => {
     if (isConnected && sensorData) {
+      // Check if distance is too close (likely ground/surface detection)
+      const MIN_VALID_DISTANCE = 60; // mm - anything closer is likely not a bottle
+      
+      if (sensorData.distance < MIN_VALID_DISTANCE) {
+        console.log(`⚠️ Distance too close (${sensorData.distance}mm) - likely no bottle detected`);
+        return 0; // No bottle detected
+      }
+      
       if (calibrationService.isDeviceCalibrated()) {
         // Use app-side calibration for accurate water level
         return calibrationService.calculateWaterLevel(sensorData) / 100; // Convert to 0-1 range
@@ -276,6 +287,96 @@ You can now track your water consumption accurately.`,
     );
   };
 
+  const handleEnterSleepMode = async () => {
+    Alert.alert(
+      'Sleep Mode Options',
+      'Choose how long the device should sleep. This will save battery power.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: '30 minutes', 
+          onPress: () => confirmSleepMode(30)
+        },
+        { 
+          text: '1 hour', 
+          onPress: () => confirmSleepMode(60)
+        },
+        { 
+          text: '2 hours', 
+          onPress: () => confirmSleepMode(120)
+        },
+        { 
+          text: '6 hours', 
+          onPress: () => confirmSleepMode(360)
+        },
+      ]
+    );
+  };
+
+  const confirmSleepMode = (minutes: number) => {
+    Alert.alert(
+      'Confirm Sleep Mode',
+      `Device will sleep for ${minutes} minutes and disconnect. You'll need to wait for it to wake up automatically or manually power cycle it. Continue?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Sleep Now', 
+          onPress: async () => {
+            const success = await enterDeepSleep(minutes);
+            if (success) {
+              Alert.alert(
+                'Sleep Mode Activated 😴',
+                `Device is entering deep sleep for ${minutes} minutes. It will wake up automatically and you can reconnect.`,
+                [{ text: 'OK' }]
+              );
+            } else {
+              Alert.alert(
+                'Sleep Mode Failed',
+                'Failed to put device into sleep mode. Please try again.',
+                [{ text: 'OK' }]
+              );
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  const handleWakeUpDevice = async () => {
+    if (isConnected) {
+      Alert.alert(
+        'Device Already Awake',
+        'The device is already connected and awake.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    Alert.alert(
+      'Wake Up Device',
+      'Attempting to wake up and reconnect to your device...',
+      [{ text: 'OK' }]
+    );
+
+    const success = await wakeUpDevice();
+    if (success) {
+      Alert.alert(
+        'Device Awake! ⏰',
+        'Successfully woken up and reconnected to your device.',
+        [{ text: 'OK' }]
+      );
+    } else {
+      Alert.alert(
+        'Wake Up Failed',
+        'Device may still be sleeping or requires manual wake-up. Try scanning for devices if the sleep period has ended.',
+        [
+          { text: 'OK' },
+          { text: 'Scan for Devices', onPress: handleScanForDevices }
+        ]
+      );
+    }
+  };
+
   const handleScanForDevices = async () => {
     setShowDeviceSelector(true);
     try {
@@ -423,10 +524,12 @@ You can now track your water consumption accurately.`,
           <View style={styles.bottleContainer}>
             <WaterBottle progress={currentWaterLevel} capacity={selectedBottleSize} />
             <Text style={styles.bottleStatus}>
-              {currentWaterAmount}ml / {selectedBottleSize}ml
+              {sensorData?.distance && sensorData.distance < 60 ? 'No Bottle Detected' : `${currentWaterAmount}ml / ${selectedBottleSize}ml`}
             </Text>
             <Text style={styles.bottleSubtext}>
-              Current Bottle Level: {Math.round(currentWaterLevel * 100)}%
+              {sensorData?.distance && sensorData.distance < 60 ? 
+                'Place bottle on device to start tracking' : 
+                `Current Bottle Level: ${Math.round(currentWaterLevel * 100)}%`}
             </Text>
           </View>
 
@@ -492,12 +595,34 @@ You can now track your water consumption accurately.`,
             <View style={styles.quickActionsColumn}>
               <NotifyButton />
               {isConnected && (
+                <>
+                  <TouchableOpacity
+                    style={styles.calibrateButton}
+                    onPress={() => setShowCalibrationModal(true)}
+                  >
+                    <Text style={styles.calibrateButtonText}>
+                      {isCalibrated ? '🔧 Recalibrate Device' : '⚙️ Calibrate Device'}
+                    </Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity
+                    style={styles.sleepButton}
+                    onPress={handleEnterSleepMode}
+                  >
+                    <Text style={styles.sleepButtonText}>
+                      😴 Sleep Mode
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              )}
+              
+              {!isConnected && (
                 <TouchableOpacity
-                  style={styles.calibrateButton}
-                  onPress={() => setShowCalibrationModal(true)}
+                  style={styles.wakeButton}
+                  onPress={handleWakeUpDevice}
                 >
-                  <Text style={styles.calibrateButtonText}>
-                    {isCalibrated ? '🔧 Recalibrate Device' : '⚙️ Calibrate Device'}
+                  <Text style={styles.wakeButtonText}>
+                    ⏰ Wake Up Device
                   </Text>
                 </TouchableOpacity>
               )}
@@ -517,7 +642,16 @@ You can now track your water consumption accurately.`,
                     📏 Distance: {currentDistance}mm
                   </Text>
                   <Text style={styles.iotInfoText}>
-                    🔧 Calibration: {isCalibrated ? 'Calibrated ✅' : 'Not Calibrated ❌'}
+                    � Raw Sensor: {sensorData?.distance || 'No data'}mm
+                  </Text>
+                  <Text style={styles.iotInfoText}>
+                    🎯 Valid Range: {sensorData?.distance && sensorData.distance > 0 && sensorData.distance < 400 ? 'Yes' : 'No'}
+                  </Text>
+                  <Text style={styles.iotInfoText}>
+                    🍼 Bottle Status: {sensorData?.distance && sensorData.distance < 60 ? 'No bottle detected (too close)' : 'Bottle detected'}
+                  </Text>
+                  <Text style={styles.iotInfoText}>
+                    �🔧 Calibration: {isCalibrated ? 'Calibrated ✅' : 'Not Calibrated ❌'}
                   </Text>
                   <Text style={styles.iotInfoText}>
                     💧 Water Level: {(currentWaterLevel * 100).toFixed(1)}% ({isCalibrated ? 'App Calculated' : 'ESP32 Raw'})
@@ -527,6 +661,9 @@ You can now track your water consumption accurately.`,
                   </Text>
                   <Text style={styles.iotInfoText}>
                     📊 Data: {isDataFresh ? 'Fresh' : 'Stale'}
+                  </Text>
+                  <Text style={styles.iotInfoText}>
+                    😴 Power: {isConnected ? 'Active' : 'Disconnected/Sleeping'}
                   </Text>
                 </>
               )}
@@ -1162,6 +1299,40 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255, 255, 255, 0.3)',
   },
   calibrateButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  sleepButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(156, 39, 176, 0.9)', // Purple for sleep
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderRadius: 12,
+    flex: 1,
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  sleepButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  wakeButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(76, 175, 80, 0.9)', // Green for wake up
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderRadius: 12,
+    flex: 1,
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+  },
+  wakeButtonText: {
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',

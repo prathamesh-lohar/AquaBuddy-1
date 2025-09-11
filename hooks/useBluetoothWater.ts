@@ -220,6 +220,77 @@ export const useBluetoothWater = () => {
     }
   };
 
+  const enterDeepSleep = async (durationMinutes: number = 60): Promise<boolean> => {
+    if (!bluetoothService.current) {
+      setConnectionError('Bluetooth service not available');
+      return false;
+    }
+
+    try {
+      console.log(`😴 Entering deep sleep mode for ${durationMinutes} minutes...`);
+      const success = await bluetoothService.current.enterDeepSleep(durationMinutes);
+      
+      if (success) {
+        setConnectionError(null);
+        console.log('✅ Device entered deep sleep mode');
+      } else {
+        setConnectionError('Failed to enter sleep mode');
+      }
+      
+      return success;
+    } catch (error) {
+      console.error('❌ Sleep mode error:', error);
+      setConnectionError('Failed to enter sleep mode');
+      return false;
+    }
+  };
+
+  const wakeUpDevice = async (): Promise<boolean> => {
+    if (!bluetoothService.current) {
+      setConnectionError('Bluetooth service not available');
+      return false;
+    }
+
+    try {
+      console.log('⏰ Attempting to wake up device...');
+      const success = await bluetoothService.current.wakeUpDevice();
+      
+      if (success) {
+        setConnectionError(null);
+        console.log('✅ Device woken up successfully');
+      } else {
+        setConnectionError('Device may still be sleeping');
+      }
+      
+      return success;
+    } catch (error) {
+      console.error('❌ Wake up error:', error);
+      setConnectionError('Failed to wake up device');
+      return false;
+    }
+  };
+
+  const sendCommand = async (command: string): Promise<boolean> => {
+    if (!bluetoothService.current) {
+      setConnectionError('Bluetooth service not available');
+      return false;
+    }
+
+    try {
+      const success = await bluetoothService.current.sendCommand(command);
+      
+      if (!success) {
+        setConnectionError('Failed to send command');
+      }
+      
+      return success;
+    } catch (error) {
+      console.error('❌ Command error:', error);
+      setConnectionError('Failed to send command');
+      return false;
+    }
+  };
+
   return {
     // Connection state
     isConnected,
@@ -247,5 +318,10 @@ export const useBluetoothWater = () => {
     disconnectDevice,
     getDiagnostics,
     forceReinitialize,
+    
+    // Sleep mode functions
+    enterDeepSleep,
+    wakeUpDevice,
+    sendCommand,
   };
 };

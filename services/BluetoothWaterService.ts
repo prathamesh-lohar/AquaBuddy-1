@@ -455,6 +455,112 @@ export class BluetoothWaterService {
     );
   }
 
+  // Send a command to the connected ESP32 device
+  public async sendCommand(command: string): Promise<boolean> {
+    if (!this.characteristic || !this.isConnected) {
+      console.error('❌ Cannot send command: Device not connected or characteristic not available');
+      return false;
+    }
+
+    try {
+      console.log(`📤 Sending command to device: ${command}`);
+      
+      // Convert command to base64 (BLE requirement)
+      const commandBuffer = Buffer.from(command, 'utf8');
+      const base64Command = commandBuffer.toString('base64');
+      
+      await this.characteristic.writeWithResponse(base64Command);
+      console.log('✅ Command sent successfully');
+      return true;
+    } catch (error) {
+      console.error('❌ Failed to send command:', error);
+      return false;
+    }
+  }
+
+  // Put ESP32-C3 into deep sleep mode
+  public async enterDeepSleep(sleepDurationMinutes: number = 60): Promise<boolean> {
+    if (!this.isConnected) {
+      console.error('❌ Cannot enter sleep mode: Device not connected');
+      return false;
+    }
+
+    try {
+      console.log(`😴 Putting device into deep sleep for ${sleepDurationMinutes} minutes...`);
+      
+      // Send sleep command with duration in JSON format
+      const sleepCommand = JSON.stringify({
+        action: 'deep_sleep',
+        duration_minutes: sleepDurationMinutes,
+        timestamp: Date.now()
+      });
+      
+      const success = await this.sendCommand(sleepCommand);
+      
+      if (success) {
+        console.log('🌙 Device entering deep sleep mode...');
+        // Device will disconnect automatically when entering sleep
+        setTimeout(() => {
+          this.handleDisconnection();
+        }, 2000); // Give device time to process command
+      }
+      
+      return success;
+    } catch (error) {
+      console.error('❌ Failed to enter deep sleep mode:', error);
+      return false;
+    }
+  }
+
+  // Wake up device (ESP32-C3 will wake up automatically after sleep duration or on external interrupt)
+  public async wakeUpDevice(): Promise<boolean> {
+    if (this.isConnected) {
+      console.log('⚠️ Device is already connected (not in sleep mode)');
+      return true;
+    }
+
+    try {
+      console.log('⏰ Attempting to wake up device...');
+      
+      // Try to reconnect (device should be awake by now)
+      if (this.device) {
+        const reconnected = await this.connectToDevice(this.device.id);
+        if (reconnected) {
+          console.log('✅ Device woken up and reconnected');
+          return true;
+        }
+      }
+      
+      console.log('⚠️ Device may still be sleeping or needs manual wake-up');
+      return false;
+    } catch (error) {
+      console.error('❌ Failed to wake up device:', error);
+      return false;
+    }
+  }
+
+  // Send calibration command to device
+  public async sendCalibrationCommand(action: 'start_empty' | 'start_full' | 'complete'): Promise<boolean> {
+    const command = JSON.stringify({
+      action: 'calibration',
+      step: action,
+      timestamp: Date.now()
+    });
+    
+    return await this.sendCommand(command);
+  }
+
+  // Send configuration update to device
+  public async updateDeviceConfig(config: { bottle_capacity?: number; reading_interval?: number; }): Promise<boolean> {
+    const command = JSON.stringify({
+      action: 'config_update',
+      config: config,
+      timestamp: Date.now()
+    });
+    
+    return await this.sendCommand(command);
+  }
+
   // Disconnect from current device
   public async disconnect(): Promise<void> {
     try {
