@@ -9,7 +9,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useAuth } from "../providers/auth-provider";
+import { useAuth } from "@/providers/auth-provider";
 
 const { width, height } = Dimensions.get("window");
 

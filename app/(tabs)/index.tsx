@@ -29,7 +29,7 @@ import { WaterBottle } from '../../components/WaterBottle';
 import { ProgressBar } from '../../components/ProgressBar';
 import { StatCard } from '../../components/StatCard';
 import { TipCard } from '../../components/TipCard';
-import { CalibrationModal } from '../../components/CalibrationModal';
+import { CalibrationModal } from '../../components/CalibrationModalNew';
 import { NotifyButton } from '../../components/NotifyButton';
 
 import { Colors, Typography, Spacing } from '../../constants/theme';
@@ -40,9 +40,10 @@ import { notificationService } from '../../services/NotificationService';
 // IoT Bottle sizes in ml
 const BOTTLE_SIZES = [
   { label: '500ml', value: 500 },
-  { label: '1L', value: 1000 },
-  { label: '2L', value: 2000 },
-  { label: '2.5L', value: 2500 },
+  { label: '1000ml', value: 1000 },
+  { label: '1500ml', value: 1500 },
+  { label: '2000ml', value: 2000 },
+  { label: '2500ml', value: 2500 },
 ];
 
 export default function HomeScreen() {
@@ -70,7 +71,7 @@ export default function HomeScreen() {
   } = useBluetoothWater();
   
   // Fallback simulation when Bluetooth is not connected
-  const [simulatedWaterLevel, setSimulatedWaterLevel] = useState(0.9);
+  const [simulatedWaterLevel, setSimulatedWaterLevel] = useState(0);
   
   // Use app-side calibration if available, otherwise use ESP32 percentage
   const currentWaterLevel = (() => {
@@ -87,13 +88,14 @@ export default function HomeScreen() {
   })();
   
   // App State
-  const selectedBottleSize = user?.bottleCapacity || 1000;
+  const [selectedBottleSize, setSelectedBottleSize] = useState(user?.bottleCapacity || 1000);
   const [dailyWaterConsumed, setDailyWaterConsumed] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [currentTip, setCurrentTip] = useState(getMotivationalTip());
   const [previousWaterLevel, setPreviousWaterLevel] = useState(currentWaterLevel);
   const [showDeviceSelector, setShowDeviceSelector] = useState(false);
   const [showCalibrationModal, setShowCalibrationModal] = useState(false);
+  const [showBottleSizeModal, setShowBottleSizeModal] = useState(false);
   const [isCalibrated, setIsCalibrated] = useState(false);
 
   // Initialize calibration service
@@ -122,20 +124,7 @@ export default function HomeScreen() {
       );
     }
   }, [isConnected, isCalibrated]);
-  useEffect(() => {
-    if (isConnected) return; // Skip simulation if Bluetooth is connected
-
-    const simulateWaterConsumption = setInterval(() => {
-      if (Math.random() < 0.15 && simulatedWaterLevel > 0.05) { // 15% chance every 45 seconds
-        const consumptionAmount = 0.03 + Math.random() * 0.07; // 3-10% of bottle
-        const newLevel = Math.max(0, simulatedWaterLevel - consumptionAmount);
-        setSimulatedWaterLevel(newLevel);
-        console.log(`Simulation: Water level decreased to ${(newLevel * 100).toFixed(1)}%`);
-      }
-    }, 45000); // Check every 45 seconds
-
-    return () => clearInterval(simulateWaterConsumption);
-  }, [isConnected, simulatedWaterLevel]);
+  // Removed automatic simulation - user requested to stop automatic behavior
 
   // Track water consumption when level decreases (with minimum threshold to avoid noise)
   useEffect(() => {
@@ -243,11 +232,25 @@ export default function HomeScreen() {
     setIsCalibrated(true);
     Alert.alert(
       'Calibration Complete! ✅',
-      `Your water bottle has been calibrated successfully. 
+      `Your water bottle has been calibrated successfully! 
       
 Empty: ${calibration.emptyBaseline.toFixed(1)}mm
 Full: ${calibration.fullBaseline.toFixed(1)}mm
-Capacity: ${calibration.bottleCapacity}ml`,
+Capacity: ${selectedBottleSize}ml
+
+You can now track your water consumption accurately.`,
+      [{ text: 'Done' }]
+    );
+  };
+
+  const handleBottleSizeSelect = (size: number) => {
+    setSelectedBottleSize(size);
+    setShowBottleSizeModal(false);
+    // Reset calibration when bottle size changes
+    setIsCalibrated(false);
+    Alert.alert(
+      'Bottle Size Updated',
+      `Bottle size changed to ${size}ml. Please recalibrate your device for accurate readings.`,
       [{ text: 'OK' }]
     );
   };
@@ -455,10 +458,38 @@ Capacity: ${calibration.bottleCapacity}ml`,
             </Text>
           </View>
 
-          {/* Notification Button */}
+          {/* Bottle Configuration */}
+          <View style={styles.configurationContainer}>
+            <Text style={styles.sectionTitle}>Bottle Configuration</Text>
+            <View style={styles.configurationCard}>
+              <View style={styles.configRow}>
+                <View style={styles.configInfo}>
+                  <Text style={styles.configLabel}>Current Bottle Size</Text>
+                  <Text style={styles.configValue}>{selectedBottleSize}ml</Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.bottleSizeButton}
+                  onPress={() => setShowBottleSizeModal(true)}
+                >
+                  <Text style={styles.bottleSizeButtonText}>
+                    Change Size
+                  </Text>
+                </TouchableOpacity>
+              </View>
+              {!isCalibrated && (
+                <View style={styles.calibrationWarning}>
+                  <Text style={styles.warningText}>
+                    ⚠️ Calibration required for accurate tracking
+                  </Text>
+                </View>
+              )}
+            </View>
+          </View>
+
+          {/* Device Actions */}
           <View style={styles.notificationContainer}>
             <Text style={styles.sectionTitle}>Quick Actions</Text>
-            <View style={styles.quickActionsRow}>
+            <View style={styles.quickActionsColumn}>
               <NotifyButton />
               {isConnected && (
                 <TouchableOpacity
@@ -466,7 +497,7 @@ Capacity: ${calibration.bottleCapacity}ml`,
                   onPress={() => setShowCalibrationModal(true)}
                 >
                   <Text style={styles.calibrateButtonText}>
-                    {isCalibrated ? '🔧 Recalibrate' : '⚙️ Calibrate Device'}
+                    {isCalibrated ? '🔧 Recalibrate Device' : '⚙️ Calibrate Device'}
                   </Text>
                 </TouchableOpacity>
               )}
@@ -688,6 +719,58 @@ Capacity: ${calibration.bottleCapacity}ml`,
           onComplete={handleCalibrationComplete}
           sensorData={sensorData}
         />
+
+        {/* Bottle Size Selection Modal */}
+        <Modal
+          visible={showBottleSizeModal}
+          animationType="slide"
+          transparent={true}
+          onRequestClose={() => setShowBottleSizeModal(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContainer}>
+              <Text style={styles.modalTitle}>Select Bottle Size</Text>
+              <Text style={styles.modalSubtitle}>
+                Choose your water bottle capacity for accurate tracking
+              </Text>
+              
+              <FlatList
+                data={BOTTLE_SIZES}
+                keyExtractor={(item) => item.value.toString()}
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={[
+                      styles.deviceItem,
+                      selectedBottleSize === item.value && styles.selectedDeviceItem
+                    ]}
+                    onPress={() => handleBottleSizeSelect(item.value)}
+                  >
+                    <View style={styles.deviceInfo}>
+                      <Text style={styles.deviceName}>
+                        {item.label}
+                      </Text>
+                      <Text style={styles.deviceName}>
+                        Capacity: {item.value}ml
+                      </Text>
+                    </View>
+                    {selectedBottleSize === item.value && (
+                      <Text style={styles.deviceName}>✓</Text>
+                    )}
+                  </TouchableOpacity>
+                )}
+              />
+              
+              <View style={styles.modalActions}>
+                <TouchableOpacity
+                  style={styles.cancelButton}
+                  onPress={() => setShowBottleSizeModal(false)}
+                >
+                  <Text style={styles.cancelButtonText}>Cancel</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
       </LinearGradient>
     </SafeAreaView>
   );
@@ -1069,12 +1152,14 @@ const styles = StyleSheet.create({
   calibrateButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FF9800',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 8,
+    backgroundColor: 'rgba(255, 152, 0, 0.9)',
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderRadius: 12,
     flex: 1,
     justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
   },
   calibrateButtonText: {
     color: '#fff',
@@ -1262,6 +1347,72 @@ const styles = StyleSheet.create({
   professionalDiagnosticButtonText: {
     fontSize: 12,
     color: '#495057',
+    fontWeight: '500',
+  },
+  // New styles for bottle configuration
+  configurationContainer: {
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: Spacing.md,
+  },
+  bottleSizeButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
+    alignItems: 'center',
+  },
+  bottleSizeButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  quickActionsColumn: {
+    flexDirection: 'row',
+    gap: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
+  configurationCard: {
+    backgroundColor: '#007BFF',
+    borderRadius: 16,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  configRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  configInfo: {
+    flex: 1,
+  },
+  configLabel: {
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontSize: 14,
+    fontWeight: '500',
+    marginBottom: 4,
+  },
+  configValue: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  calibrationWarning: {
+    marginTop: 12,
+    padding: 12,
+    backgroundColor: 'rgba(255, 193, 7, 0.2)',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 193, 7, 0.4)',
+  },
+  warningText: {
+    color: '#fff',
+    fontSize: 12,
+    textAlign: 'center',
     fontWeight: '500',
   },
 });
