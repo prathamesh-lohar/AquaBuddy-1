@@ -29,7 +29,7 @@ import { WaterBottle } from '../../components/WaterBottle';
 import { ProgressBar } from '../../components/ProgressBar';
 import { StatCard } from '../../components/StatCard';
 import { TipCard } from '../../components/TipCard';
-import { CalibrationModal } from '../../components/CalibrationModalNew';
+import { CalibrationModal } from '../../components/CalibrationModal';
 import { NotifyButton } from '../../components/NotifyButton';
 
 import { Colors, Typography, Spacing } from '../../constants/theme';
@@ -80,7 +80,7 @@ export default function HomeScreen() {
   const currentWaterLevel = (() => {
     if (isConnected && sensorData) {
       // Check if distance is too close (likely ground/surface detection)
-      const MIN_VALID_DISTANCE = 60; // mm - anything closer is likely not a bottle
+      const MIN_VALID_DISTANCE = 40; // mm - anything closer is likely not a bottle
       
       if (sensorData.distance < MIN_VALID_DISTANCE) {
         console.log(`⚠️ Distance too close (${sensorData.distance}mm) - likely no bottle detected`);

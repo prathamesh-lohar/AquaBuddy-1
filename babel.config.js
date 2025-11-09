@@ -7,8 +7,7 @@ module.exports = function(api) {
       ['@babel/preset-react', { runtime: 'automatic' }]
     ],
     plugins: [
-      // Required for expo-router
-      require.resolve('expo-router/babel'),
+      // expo-router functionality is now included in babel-preset-expo
     ],
   };
 };
