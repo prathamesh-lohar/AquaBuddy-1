@@ -12,24 +12,30 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
+import { router, useRouter } from 'expo-router';
 import { 
   User, 
   Settings, 
   Bell, 
   Target, 
   Download, 
-  Palette,
-  ChevronRight 
+  ChevronRight,
+  LogOut,
+  Calendar,
+  Activity,
+  Scale,
+  Ruler,
+  Clock
 } from 'lucide-react-native';
 
-import { useWaterTracking } from '../../hooks/useWaterTracking';
-import { Colors, Typography, BorderRadius, Shadow, Spacing } from '../../constants/theme';
+import { useAuth } from '@/providers/auth-provider';
+import { Colors, Typography, BorderRadius, Shadow, Spacing } from '@/constants/theme';
 
 export default function ProfileScreen() {
-  const { userProfile, updateUserProfile, currentTotal, streakCount } = useWaterTracking();
+  const { user, signOut, updateProfile } = useAuth();
+  const router = useRouter();
   const [isEditing, setIsEditing] = useState(false);
-  const [tempName, setTempName] = useState(userProfile?.name || '');
-  const [tempGoal, setTempGoal] = useState(userProfile?.dailyGoal?.toString() || '3000');
+  const [tempName, setTempName] = useState(user?.name || '');
 
   const handleSaveProfile = async () => {
     if (!tempName.trim()) {
@@ -37,37 +43,41 @@ export default function ProfileScreen() {
       return;
     }
 
-    const goal = parseInt(tempGoal, 10);
-    if (isNaN(goal) || goal < 500 || goal > 10000) {
-      Alert.alert('Error', 'Please enter a valid daily goal (500-10000ml)');
-      return;
-    }
-
-    const success = await updateUserProfile({
-      name: tempName.trim(),
-      dailyGoal: goal,
-    });
-
-    if (success) {
+    try {
+      await updateProfile({
+        name: tempName.trim(),
+      });
       setIsEditing(false);
       Alert.alert('Success', 'Profile updated successfully');
-    } else {
+    } catch (error) {
       Alert.alert('Error', 'Failed to update profile');
     }
   };
 
   const handleCancelEdit = () => {
-    setTempName(userProfile?.name || '');
-    setTempGoal(userProfile?.dailyGoal?.toString() || '3000');
+    setTempName(user?.name || '');
     setIsEditing(false);
   };
 
-  const handleNotificationToggle = async (enabled: boolean) => {
-    await updateUserProfile({ notifications: enabled });
-  };
-
-  const handleUnitToggle = async (unit: 'ml' | 'oz') => {
-    await updateUserProfile({ unit });
+  const handleSignOut = () => {
+    Alert.alert(
+      'Sign Out',
+      'Are you sure you want to sign out?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Sign Out', 
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await signOut();
+            } catch (error) {
+              Alert.alert('Error', 'Failed to sign out');
+            }
+          }
+        },
+      ]
+    );
   };
 
   const handleExportData = () => {
@@ -90,7 +100,15 @@ export default function ProfileScreen() {
       .slice(0, 2);
   };
 
-  if (!userProfile) {
+  const formatDate = (date: Date) => {
+    return date.toLocaleDateString('en-US', {
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric'
+    });
+  };
+
+  if (!user) {
     return (
       <View style={[styles.container, styles.centerContent]}>
         <Text style={styles.loadingText}>Loading profile...</Text>
@@ -103,7 +121,7 @@ export default function ProfileScreen() {
       <StatusBar style="dark" />
       
       <LinearGradient
-        colors={Colors.background.gradient}
+        colors={["#f8fafc", "#e2e8f0"]}
         style={styles.gradient}
       >
         <ScrollView
@@ -121,7 +139,7 @@ export default function ProfileScreen() {
             <View style={styles.avatarContainer}>
               <View style={styles.avatar}>
                 <Text style={styles.avatarText}>
-                  {getInitials(userProfile.name)}
+                  {getInitials(user.name)}
                 </Text>
               </View>
             </View>
@@ -135,17 +153,6 @@ export default function ProfileScreen() {
                   placeholder="Enter your name"
                   placeholderTextColor={Colors.text.medium}
                 />
-                <View style={styles.goalInputContainer}>
-                  <TextInput
-                    style={styles.goalInput}
-                    value={tempGoal}
-                    onChangeText={setTempGoal}
-                    placeholder="Daily goal"
-                    placeholderTextColor={Colors.text.medium}
-                    keyboardType="numeric"
-                  />
-                  <Text style={styles.goalUnit}>ml</Text>
-                </View>
                 <View style={styles.editActions}>
                   <TouchableOpacity
                     style={[styles.actionButton, styles.cancelButton]}
@@ -163,11 +170,8 @@ export default function ProfileScreen() {
               </View>
             ) : (
               <View style={styles.profileInfo}>
-                <Text style={styles.profileName}>{userProfile.name}</Text>
-                <Text style={styles.profileEmail}>{userProfile.email}</Text>
-                <Text style={styles.profileGoal}>
-                  Daily Goal: {userProfile.dailyGoal}ml
-                </Text>
+                <Text style={styles.profileName}>{user.name}</Text>
+                <Text style={styles.profileEmail}>{user.email}</Text>
                 <TouchableOpacity
                   style={styles.editButton}
                   onPress={() => setIsEditing(true)}
@@ -178,20 +182,118 @@ export default function ProfileScreen() {
             )}
           </View>
 
-          {/* Stats */}
+          {/* Basic Information */}
+          <View style={styles.infoContainer}>
+            <Text style={styles.sectionTitle}>Account Information</Text>
+            
+            <View style={styles.infoItem}>
+              <View style={styles.infoIcon}>
+                <Calendar size={20} color="#0ea5e9" />
+              </View>
+              <View style={styles.infoContent}>
+                <Text style={styles.infoLabel}>Member since</Text>
+                <Text style={styles.infoValue}>{formatDate(user.createdAt)}</Text>
+              </View>
+            </View>
+
+            <View style={styles.infoItem}>
+              <View style={styles.infoIcon}>
+                <User size={20} color="#0ea5e9" />
+              </View>
+              <View style={styles.infoContent}>
+                <Text style={styles.infoLabel}>Onboarding Status</Text>
+                <Text style={styles.infoValue}>
+                  {user.onboardingCompleted ? 'Completed' : 'Pending'}
+                </Text>
+              </View>
+            </View>
+          </View>
+
+          {/* Onboarding Information (if completed) */}
+          {user.onboardingCompleted && (
+            <View style={styles.infoContainer}>
+              <Text style={styles.sectionTitle}>Your Information</Text>
+              
+              {user.weight && (
+                <View style={styles.infoItem}>
+                  <View style={styles.infoIcon}>
+                    <Scale size={20} color="#0ea5e9" />
+                  </View>
+                  <View style={styles.infoContent}>
+                    <Text style={styles.infoLabel}>Weight</Text>
+                    <Text style={styles.infoValue}>{user.weight} kg</Text>
+                  </View>
+                </View>
+              )}
+
+              {user.height && (
+                <View style={styles.infoItem}>
+                  <View style={styles.infoIcon}>
+                    <Ruler size={20} color="#0ea5e9" />
+                  </View>
+                  <View style={styles.infoContent}>
+                    <Text style={styles.infoLabel}>Height</Text>
+                    <Text style={styles.infoValue}>{user.height} cm</Text>
+                  </View>
+                </View>
+              )}
+
+              {user.activityLevel && (
+                <View style={styles.infoItem}>
+                  <View style={styles.infoIcon}>
+                    <Activity size={20} color="#0ea5e9" />
+                  </View>
+                  <View style={styles.infoContent}>
+                    <Text style={styles.infoLabel}>Activity Level</Text>
+                    <Text style={styles.infoValue}>
+                      {user.activityLevel.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                    </Text>
+                  </View>
+                </View>
+              )}
+
+              {user.sleepSchedule && (
+                <View style={styles.infoItem}>
+                  <View style={styles.infoIcon}>
+                    <Clock size={20} color="#0ea5e9" />
+                  </View>
+                  <View style={styles.infoContent}>
+                    <Text style={styles.infoLabel}>Sleep Schedule</Text>
+                    <Text style={styles.infoValue}>
+                      {user.sleepSchedule.bedTime} - {user.sleepSchedule.wakeTime}
+                    </Text>
+                  </View>
+                </View>
+              )}
+
+              {user.dailyGoal && (
+                <View style={styles.infoItem}>
+                  <View style={styles.infoIcon}>
+                    <Target size={20} color="#0ea5e9" />
+                  </View>
+                  <View style={styles.infoContent}>
+                    <Text style={styles.infoLabel}>Daily Goal</Text>
+                    <Text style={styles.infoValue}>
+                      {user.dailyGoal} {user.unit || 'ml'}
+                    </Text>
+                  </View>
+                </View>
+              )}
+            </View>
+          )}
+
+          {/* Stats - Basic placeholder */}
           <View style={styles.statsContainer}>
             <View style={styles.statCard}>
-              <Text style={styles.statValue}>{Math.round(currentTotal / 1000 * 10) / 10}L</Text>
+              <Text style={styles.statValue}>2.1L</Text>
               <Text style={styles.statLabel}>Today</Text>
             </View>
             <View style={styles.statCard}>
-              <Text style={styles.statValue}>{streakCount}</Text>
+              <Text style={styles.statValue}>5</Text>
               <Text style={styles.statLabel}>Day Streak</Text>
             </View>
             <View style={styles.statCard}>
-              <Text style={styles.statValue}>
-                {Math.round((currentTotal / userProfile.dailyGoal) * 100)}%
-              </Text>
+              <Text style={styles.statValue}>84%</Text>
               <Text style={styles.statLabel}>Goal Progress</Text>
             </View>
           </View>
@@ -201,58 +303,45 @@ export default function ProfileScreen() {
             <Text style={styles.sectionTitle}>Settings</Text>
             
             {/* Notifications */}
-            <View style={styles.settingItem}>
-              <View style={styles.settingLeft}>
-                <Bell size={20} color={Colors.primary} strokeWidth={2} />
-                <Text style={styles.settingLabel}>Notifications</Text>
-              </View>
-              <Switch
-                value={userProfile.notifications}
-                onValueChange={handleNotificationToggle}
-                trackColor={{ false: Colors.background.light, true: Colors.primary }}
-                thumbColor={Colors.background.white}
-              />
-            </View>
+            {user.onboardingCompleted && (
+              <TouchableOpacity style={styles.settingItem}>
+                <View style={styles.settingLeft}>
+                  <Bell size={20} color={Colors.primary} strokeWidth={2} />
+                  <Text style={styles.settingLabel}>Notifications</Text>
+                </View>
+                <Text style={styles.settingValue}>
+                  {user.notifications ? 'Enabled' : 'Disabled'}
+                </Text>
+              </TouchableOpacity>
+            )}
 
             {/* Units */}
-            <View style={styles.settingItem}>
-              <View style={styles.settingLeft}>
-                <Target size={20} color={Colors.primary} strokeWidth={2} />
-                <Text style={styles.settingLabel}>Units</Text>
-              </View>
-              <View style={styles.unitToggle}>
-                <TouchableOpacity
-                  style={[
-                    styles.unitButton,
-                    userProfile.unit === 'ml' && styles.activeUnitButton,
-                  ]}
-                  onPress={() => handleUnitToggle('ml')}
-                >
-                  <Text style={[
-                    styles.unitButtonText,
-                    userProfile.unit === 'ml' && styles.activeUnitButtonText,
-                  ]}>ml</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[
-                    styles.unitButton,
-                    userProfile.unit === 'oz' && styles.activeUnitButton,
-                  ]}
-                  onPress={() => handleUnitToggle('oz')}
-                >
-                  <Text style={[
-                    styles.unitButtonText,
-                    userProfile.unit === 'oz' && styles.activeUnitButtonText,
-                  ]}>oz</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
+            {user.onboardingCompleted && user.unit && (
+              <TouchableOpacity style={styles.settingItem}>
+                <View style={styles.settingLeft}>
+                  <Target size={20} color={Colors.primary} strokeWidth={2} />
+                  <Text style={styles.settingLabel}>Units</Text>
+                </View>
+                <Text style={styles.settingValue}>
+                  {user.unit.toUpperCase()}
+                </Text>
+              </TouchableOpacity>
+            )}
 
             {/* Export Data */}
             <TouchableOpacity style={styles.settingItem} onPress={handleExportData}>
               <View style={styles.settingLeft}>
                 <Download size={20} color={Colors.primary} strokeWidth={2} />
                 <Text style={styles.settingLabel}>Export Data</Text>
+              </View>
+              <ChevronRight size={20} color={Colors.text.medium} strokeWidth={2} />
+            </TouchableOpacity>
+
+            {/* Sign Out */}
+            <TouchableOpacity style={styles.settingItem} onPress={handleSignOut}>
+              <View style={styles.settingLeft}>
+                <LogOut size={20} color="#ef4444" strokeWidth={2} />
+                <Text style={[styles.settingLabel, { color: '#ef4444' }]}>Sign Out</Text>
               </View>
               <ChevronRight size={20} color={Colors.text.medium} strokeWidth={2} />
             </TouchableOpacity>
@@ -469,6 +558,11 @@ const styles = StyleSheet.create({
     color: Colors.text.dark,
     marginLeft: Spacing.md,
   },
+  settingValue: {
+    ...Typography.caption,
+    color: Colors.text.medium,
+    fontWeight: '500',
+  },
   unitToggle: {
     flexDirection: 'row',
     backgroundColor: Colors.background.light,
@@ -492,5 +586,65 @@ const styles = StyleSheet.create({
   },
   bottomSpacing: {
     height: Spacing.xxl,
+  },
+  infoContainer: {
+    backgroundColor: Colors.background.white,
+    borderRadius: BorderRadius.medium,
+    padding: Spacing.lg,
+    marginHorizontal: Spacing.md,
+    marginBottom: Spacing.lg,
+    ...Shadow.small,
+  },
+  infoItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: Spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.background.light,
+  },
+  infoContent: {
+    flex: 1,
+    marginLeft: Spacing.md,
+  },
+  onboardingContainer: {
+    backgroundColor: Colors.background.white,
+    borderRadius: BorderRadius.medium,
+    padding: Spacing.lg,
+    marginHorizontal: Spacing.md,
+    marginBottom: Spacing.lg,
+    ...Shadow.small,
+  },
+  infoGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: Spacing.sm,
+  },
+  infoCard: {
+    backgroundColor: Colors.background.light,
+    borderRadius: BorderRadius.small,
+    padding: Spacing.md,
+    width: '48%',
+    alignItems: 'center',
+  },
+  infoIcon: {
+    width: 32,
+    height: 32,
+    backgroundColor: Colors.background.white,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: Spacing.sm,
+  },
+  infoLabel: {
+    ...Typography.caption,
+    color: Colors.text.medium,
+    textAlign: 'center',
+    marginBottom: 2,
+  },
+  infoValue: {
+    ...Typography.caption,
+    color: Colors.text.dark,
+    fontWeight: '600',
+    textAlign: 'center',
   },
 });

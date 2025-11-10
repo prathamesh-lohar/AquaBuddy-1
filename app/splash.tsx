@@ -14,7 +14,7 @@ import { useAuth } from "@/providers/auth-provider";
 const { width, height } = Dimensions.get("window");
 
 export default function SplashScreen() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { user, isAuthenticated, isLoading } = useAuth();
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(0.8)).current;
   const rippleAnim = useRef(new Animated.Value(0)).current;
@@ -45,12 +45,13 @@ export default function SplashScreen() {
 
     startAnimations();
 
+    // Wait for animations and auth state to be ready
     const timer = setTimeout(() => {
       if (!isLoading) {
-        if (isAuthenticated) {
-          router.replace("/(tabs)");
-        } else {
+        if (!isAuthenticated) {
           router.replace("/auth");
+        } else {
+          router.replace("/(tabs)");
         }
       }
     }, 2500);

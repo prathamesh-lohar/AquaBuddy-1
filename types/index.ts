@@ -13,13 +13,40 @@ export interface DayRecord {
   achieved: boolean;
 }
 
-export interface UserProfile {
+export interface OnboardingData {
+  // Step 1: Personal Info
   name: string;
-  email: string;
-  dailyGoal: number;
+  birthDate: Date;
+  sex: 'male' | 'female' | 'other';
+  weight: number; // in kg
+  height: number; // in cm
+  
+  // Step 2: Lifestyle
+  activityLevel: 'sedentary' | 'light' | 'moderate' | 'active' | 'very_active';
+  sleepSchedule: {
+    bedTime: string; // HH:MM format
+    wakeTime: string; // HH:MM format
+  };
+  healthConditions: string[];
+  
+  // Step 3: Preferences
   unit: 'ml' | 'oz';
   notifications: boolean;
   reminderInterval: number; // hours
+  
+  // Step 4: Role
+  role: 'personal' | 'caretaker';
+  
+  // Calculated daily goal based on weight, activity, etc.
+  dailyGoal: number;
+}
+
+export interface UserProfile extends OnboardingData {
+  id: string;
+  email: string;
+  createdAt: Date;
+  onboardingCompleted: boolean;
+  lastUpdated: Date;
 }
 
 export interface DeviceCalibration {

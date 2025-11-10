@@ -11,6 +11,8 @@ import {
   View,
   Alert,
   ScrollView,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useAuth } from "@/providers/auth-provider";
@@ -19,61 +21,101 @@ import { Eye, EyeOff, Mail, Lock, User, Droplets } from "lucide-react-native";
 const { width } = Dimensions.get("window");
 
 export default function AuthScreen() {
-  const { login } = useAuth();
-  const [isLogin, setIsLogin] = useState(true);
+  const { signIn, signUp, sendPasswordReset } = useAuth();
+  const [isLogin, setIsLogin] = useState(true); // Start with login by default
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [name, setName] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [forgotPasswordMode, setForgotPasswordMode] = useState(false);
   
   const slideAnim = useRef(new Animated.Value(0)).current;
   const fadeAnim = useRef(new Animated.Value(1)).current;
 
   const toggleMode = () => {
-    Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 0,
-        duration: 150,
-        useNativeDriver: true,
-      }),
-      Animated.timing(slideAnim, {
-        toValue: isLogin ? -width : 0,
-        duration: 300,
-        useNativeDriver: true,
-      }),
-    ]).start(() => {
-      setIsLogin(!isLogin);
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 150,
-        useNativeDriver: true,
-      }).start();
-    });
+    setForgotPasswordMode(false);
+    setIsLogin(!isLogin);
+    setPassword("");
+    setConfirmPassword("");
+    setName("");
+  };
+
+  const validateForm = () => {
+    if (!email || !email.includes('@')) {
+      Alert.alert("Error", "Please enter a valid email address");
+      return false;
+    }
+
+    if (forgotPasswordMode) {
+      return true;
+    }
+
+    if (!password) {
+      Alert.alert("Error", "Please enter a password");
+      return false;
+    }
+
+    if (password.length < 6) {
+      Alert.alert("Error", "Password should be at least 6 characters long");
+      return false;
+    }
+
+    if (!isLogin) {
+      if (!name || name.trim().length < 2) {
+        Alert.alert("Error", "Please enter your full name");
+        return false;
+      }
+
+      if (password !== confirmPassword) {
+        Alert.alert("Error", "Passwords do not match");
+        return false;
+      }
+    }
+
+    return true;
   };
 
   const handleAuth = async () => {
-    if (!email || !password || (!isLogin && !name)) {
-      Alert.alert("Error", "Please fill in all fields");
-      return;
-    }
+    if (!validateForm()) return;
 
     setLoading(true);
     try {
-      await login({ email, password, name: isLogin ? undefined : name });
-      router.replace("/(tabs)");
-    } catch (error) {
-      Alert.alert("Error", "Authentication failed");
+      if (forgotPasswordMode) {
+        const result = await sendPasswordReset(email);
+        if (result.success) {
+          Alert.alert(
+            "Password Reset Sent",
+            "Check your email for password reset instructions.",
+            [{ text: "OK", onPress: () => setForgotPasswordMode(false) }]
+          );
+        } else {
+          Alert.alert("Error", result.error || "Failed to send reset email");
+        }
+        return;
+      }
+
+      if (isLogin) {
+        const result = await signIn(email, password);
+        if (!result.success && result.error) {
+          Alert.alert("Error", result.error);
+          return;
+        }
+      } else {
+        const result = await signUp(name, email, password);
+        if (!result.success && result.error) {
+          Alert.alert("Error", result.error);
+          return;
+        }
+      }
+
+      // Navigation will be handled by the auth provider
+    } catch (error: any) {
+      Alert.alert("Error", error.message || "Authentication failed");
     } finally {
       setLoading(false);
-    }
-  };
-
-  const fillSampleCredentials = () => {
-    setEmail("sree@test.com");
-    setPassword("sree123");
-    if (!isLogin) {
-      setName("sree User");
     }
   };
 
@@ -83,137 +125,189 @@ export default function AuthScreen() {
       style={styles.container}
     >
       <SafeAreaView style={styles.safeArea}>
-        <ScrollView 
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          style={styles.keyboardAvoidingView}
         >
-          <View style={styles.content}>
-            <Animated.View
-              style={[
-                styles.formContainer,
-                {
-                  opacity: fadeAnim,
-                  transform: [{ translateX: slideAnim }],
-                },
-              ]}
-            >
-              <View style={styles.header}>
-                <View style={styles.logoContainer}>
-                  <View style={styles.logoCircle}>
-                    <Droplets size={32} color="#0ea5e9" />
+          <ScrollView 
+            contentContainerStyle={styles.scrollContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            <View style={styles.content}>
+              <View style={styles.formContainer}>
+                <View style={styles.header}>
+                  <View style={styles.logoContainer}>
+                    <View style={styles.logoCircle}>
+                      <Droplets size={32} color="#0ea5e9" />
+                    </View>
+                    <Text style={styles.appName}>AquaBuddy</Text>
                   </View>
-                  <Text style={styles.appName}>Smart Hydration</Text>
+                  
+                  <Text style={styles.title}>
+                    {forgotPasswordMode 
+                      ? "Reset Password" 
+                      : (isLogin ? "Welcome Back" : "Create Account")
+                    }
+                  </Text>
+                  <Text style={styles.subtitle}>
+                    {forgotPasswordMode 
+                      ? "Enter your email to receive reset instructions"
+                      : (isLogin 
+                        ? "Sign in to continue your hydration journey" 
+                        : "Start tracking your water intake today"
+                      )
+                    }
+                  </Text>
                 </View>
-                
-                <Text style={styles.title}>
-                  {isLogin ? "Welcome Back" : "Create Account"}
-                </Text>
-                <Text style={styles.subtitle}>
-                  {isLogin 
-                    ? "Sign in to continue your hydration journey" 
-                    : "Start tracking your water intake today"
-                  }
-                </Text>
-              </View>
 
-              <View style={styles.form}>
-                {!isLogin && (
+                <View style={styles.form}>
+                  {!isLogin && !forgotPasswordMode && (
+                    <View style={styles.inputWrapper}>
+                      <View style={styles.inputContainer}>
+                        <User size={20} color="#64748b" style={styles.inputIcon} />
+                        <TextInput
+                          style={styles.input}
+                          placeholder="Full Name"
+                          placeholderTextColor="#94a3b8"
+                          value={name}
+                          onChangeText={setName}
+                          autoCapitalize="words"
+                          autoComplete="name"
+                        />
+                      </View>
+                    </View>
+                  )}
+                  
                   <View style={styles.inputWrapper}>
                     <View style={styles.inputContainer}>
-                      <User size={20} color="#64748b" style={styles.inputIcon} />
+                      <Mail size={20} color="#64748b" style={styles.inputIcon} />
                       <TextInput
                         style={styles.input}
-                        placeholder="Full Name"
+                        placeholder="Email"
                         placeholderTextColor="#94a3b8"
-                        value={name}
-                        onChangeText={setName}
-                        autoCapitalize="words"
+                        value={email}
+                        onChangeText={setEmail}
+                        keyboardType="email-address"
+                        autoCapitalize="none"
+                        autoComplete="email"
                       />
                     </View>
                   </View>
-                )}
-                
-                <View style={styles.inputWrapper}>
-                  <View style={styles.inputContainer}>
-                    <Mail size={20} color="#64748b" style={styles.inputIcon} />
-                    <TextInput
-                      style={styles.input}
-                      placeholder="Email"
-                      placeholderTextColor="#94a3b8"
-                      value={email}
-                      onChangeText={setEmail}
-                      keyboardType="email-address"
-                      autoCapitalize="none"
-                    />
-                  </View>
-                </View>
 
-                <View style={styles.inputWrapper}>
-                  <View style={styles.inputContainer}>
-                    <Lock size={20} color="#64748b" style={styles.inputIcon} />
-                    <TextInput
-                      style={styles.input}
-                      placeholder="Password"
-                      placeholderTextColor="#94a3b8"
-                      value={password}
-                      onChangeText={setPassword}
-                      secureTextEntry={!showPassword}
-                    />
-                    <TouchableOpacity
-                      onPress={() => setShowPassword(!showPassword)}
-                      style={styles.eyeIcon}
-                    >
-                      {showPassword ? (
-                        <EyeOff size={20} color="#64748b" />
-                      ) : (
-                        <Eye size={20} color="#64748b" />
+                  {!forgotPasswordMode && (
+                    <>
+                      <View style={styles.inputWrapper}>
+                        <View style={styles.inputContainer}>
+                          <Lock size={20} color="#64748b" style={styles.inputIcon} />
+                          <TextInput
+                            style={styles.input}
+                            placeholder="Password"
+                            placeholderTextColor="#94a3b8"
+                            value={password}
+                            onChangeText={setPassword}
+                            secureTextEntry={!showPassword}
+                            autoComplete={isLogin ? "current-password" : "new-password"}
+                          />
+                          <TouchableOpacity
+                            onPress={() => setShowPassword(!showPassword)}
+                            style={styles.eyeIcon}
+                          >
+                            {showPassword ? (
+                              <EyeOff size={20} color="#64748b" />
+                            ) : (
+                              <Eye size={20} color="#64748b" />
+                            )}
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+
+                      {!isLogin && (
+                        <View style={styles.inputWrapper}>
+                          <View style={styles.inputContainer}>
+                            <Lock size={20} color="#64748b" style={styles.inputIcon} />
+                            <TextInput
+                              style={styles.input}
+                              placeholder="Confirm Password"
+                              placeholderTextColor="#94a3b8"
+                              value={confirmPassword}
+                              onChangeText={setConfirmPassword}
+                              secureTextEntry={!showConfirmPassword}
+                              autoComplete="new-password"
+                            />
+                            <TouchableOpacity
+                              onPress={() => setShowConfirmPassword(!showConfirmPassword)}
+                              style={styles.eyeIcon}
+                            >
+                              {showConfirmPassword ? (
+                                <EyeOff size={20} color="#64748b" />
+                              ) : (
+                                <Eye size={20} color="#64748b" />
+                              )}
+                            </TouchableOpacity>
+                          </View>
+                        </View>
                       )}
-                    </TouchableOpacity>
-                  </View>
-                </View>
+                    </>
+                  )}
 
-                <View style={styles.sampleCredentialsContainer}>
-                  <Text style={styles.sampleCredentialsTitle}>📋 Sample Login Credentials:</Text>
-                  <Text style={styles.sampleCredentialsText}>Email: sree@test.com</Text>
-                  <Text style={styles.sampleCredentialsText}>Password: sree123</Text>
+                  {isLogin && !forgotPasswordMode && (
+                    <TouchableOpacity
+                      style={styles.forgotPasswordButton}
+                      onPress={() => setForgotPasswordMode(true)}
+                    >
+                      <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
+                    </TouchableOpacity>
+                  )}
+
                   <TouchableOpacity
-                    style={styles.sampleButton}
-                    onPress={fillSampleCredentials}
+                    style={[styles.authButton, loading && styles.authButtonDisabled]}
+                    onPress={handleAuth}
+                    disabled={loading}
                   >
-                    <Text style={styles.sampleButtonText}>
-                      💡 Auto-fill Sample Credentials
+                    <Text style={styles.authButtonText}>
+                      {loading 
+                        ? "Please wait..." 
+                        : (forgotPasswordMode 
+                          ? "Send Reset Email" 
+                          : (isLogin ? "Sign In" : "Create Account")
+                        )
+                      }
                     </Text>
                   </TouchableOpacity>
+
+                  {forgotPasswordMode ? (
+                    <TouchableOpacity
+                      style={styles.switchButton}
+                      onPress={() => setForgotPasswordMode(false)}
+                    >
+                      <Text style={styles.switchButtonText}>
+                        Back to <Text style={styles.switchButtonTextBold}>Sign In</Text>
+                      </Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <>
+                      <TouchableOpacity
+                        style={styles.switchButton}
+                        onPress={toggleMode}
+                      >
+                        <Text style={styles.switchButtonText}>
+                          {isLogin 
+                            ? "Don't have an account? " 
+                            : "Already have an account? "
+                          }
+                          <Text style={styles.switchButtonTextBold}>
+                            {isLogin ? "Sign Up" : "Sign In"}
+                          </Text>
+                        </Text>
+                      </TouchableOpacity>
+                    </>
+                  )}
                 </View>
-
-                <TouchableOpacity
-                  style={[styles.authButton, loading && styles.authButtonDisabled]}
-                  onPress={handleAuth}
-                  disabled={loading}
-                >
-                  <Text style={styles.authButtonText}>
-                    {loading ? "Please wait..." : (isLogin ? "Sign In" : "Create Account")}
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.switchButton}
-                  onPress={toggleMode}
-                >
-                  <Text style={styles.switchButtonText}>
-                    {isLogin 
-                      ? "Don't have an account? " 
-                      : "Already have an account? "
-                    }
-                    <Text style={styles.switchButtonTextBold}>
-                      {isLogin ? "Sign Up" : "Sign In"}
-                    </Text>
-                  </Text>
-                </TouchableOpacity>
               </View>
-            </Animated.View>
-          </View>
-        </ScrollView>
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </SafeAreaView>
     </LinearGradient>
   );
@@ -224,6 +318,9 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   safeArea: {
+    flex: 1,
+  },
+  keyboardAvoidingView: {
     flex: 1,
   },
   scrollContent: {
@@ -309,6 +406,15 @@ const styles = StyleSheet.create({
   },
   eyeIcon: {
     padding: 4,
+  },
+  forgotPasswordButton: {
+    alignSelf: "flex-end",
+    marginBottom: 8,
+  },
+  forgotPasswordText: {
+    color: "#0ea5e9",
+    fontSize: 14,
+    fontWeight: "600" as const,
   },
   sampleCredentialsContainer: {
     backgroundColor: "#f0f9ff",

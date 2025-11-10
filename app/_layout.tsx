@@ -6,6 +6,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { AuthProvider } from "@/providers/auth-provider";
 import { HydrationProvider } from "@/providers/hydration-proider";
 import 'react-native-get-random-values';
+
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
 
@@ -28,6 +29,12 @@ function RootLayoutNav() {
       />
       <Stack.Screen 
         name="auth" 
+        options={{
+          gestureEnabled: false,
+        }}
+      />
+      <Stack.Screen 
+        name="onboarding" 
         options={{
           gestureEnabled: false,
         }}
