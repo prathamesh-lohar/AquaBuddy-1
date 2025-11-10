@@ -99,7 +99,7 @@ export default function HomeScreen() {
   })();
   
   // App State
-  const [selectedBottleSize, setSelectedBottleSize] = useState(user?.bottleCapacity || 1000);
+  const [selectedBottleSize, setSelectedBottleSize] = useState(1000);
   const [dailyWaterConsumed, setDailyWaterConsumed] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
   const [currentTip, setCurrentTip] = useState(getMotivationalTip());
