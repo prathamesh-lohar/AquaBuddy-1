@@ -16,13 +16,16 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 
 import { useCaretakerAuth } from '../../../providers/caretaker-auth-provider';
+import { useBluetoothWater } from '../../../hooks/useBluetoothWater';
 import { WaterBottle } from '../../../components/WaterBottle';
 import { ProgressBar } from '../../../components/ProgressBar';
 import { StatCard } from '../../../components/StatCard';
 import { TipCard } from '../../../components/TipCard';
+import { SimpleCalibrationModal } from '../../../components/SimpleCalibrationModal';
 
 import { Colors, Typography, Spacing } from '../../../constants/theme';
 import { formatWaterAmount, getMotivationalTip } from '../../../utils/waterUtils';
+import { calibrationService } from '../../../services/CalibrationService';
 import { PatientUser } from '../../../types/caretaker';
 
 export default function PatientDetailScreen() {
@@ -30,17 +33,79 @@ export default function PatientDetailScreen() {
   const { managedUsers, caretaker, refreshData } = useCaretakerAuth();
   const [refreshing, setRefreshing] = useState(false);
   const [currentTip] = useState(getMotivationalTip());
+  const [showCalibrationModal, setShowCalibrationModal] = useState(false);
+  const [isCalibrated, setIsCalibrated] = useState(false);
 
   // Find the patient data
   const patient = managedUsers.find(p => p.id === id);
 
-  // Mock real-time data (in production, this would come from Firebase/IoT)
+  // Bluetooth IoT Integration
+  const {
+    isConnected,
+    isConnecting,
+    isScanning,
+    availableDevices,
+    selectedDevice,
+    connectionError,
+    currentWaterLevel: bluetoothWaterLevel,
+    currentDistance,
+    lastUpdateTime,
+    isDataFresh,
+    sensorData,
+    scanForDevices,
+    stopScanning,
+    selectDevice,
+    connectToDevice,
+    disconnectDevice,
+  } = useBluetoothWater();
+
+  // Use real IoT data if connected, otherwise mock data
+  const currentWaterLevel = (() => {
+    if (isConnected && sensorData) {
+      const MIN_VALID_DISTANCE = 40; // mm - anything closer is likely not a bottle
+      
+      if (sensorData.distance < MIN_VALID_DISTANCE) {
+        console.log(`⚠️ Distance too close (${sensorData.distance}mm) - likely no bottle detected`);
+        return 0; // No bottle detected
+      }
+      
+      if (calibrationService.isDeviceCalibrated()) {
+        return calibrationService.calculateWaterLevel(sensorData) / 100; // Convert to 0-1 range
+      } else {
+        return Math.min(Math.max(sensorData.waterLevel / 100, 0), 1);
+      }
+    }
+    return 0.65; // Fallback mock data
+  })();
+
+  // Mock real-time data (enhanced with IoT integration)
   const [mockData, setMockData] = useState({
-    currentWaterLevel: 0.65, // 65% full
     dailyConsumed: 1400, // ml consumed today
     lastDrinkTime: new Date(Date.now() - 45 * 60000), // 45 minutes ago
-    isDeviceConnected: true,
   });
+
+  // Initialize calibration service
+  useEffect(() => {
+    const initCalibration = async () => {
+      await calibrationService.loadCalibration();
+      setIsCalibrated(calibrationService.isDeviceCalibrated());
+    };
+    initCalibration();
+  }, []);
+
+  // Check for calibration needed when device connects
+  useEffect(() => {
+    if (isConnected && !isCalibrated) {
+      Alert.alert(
+        'Device Calibration Required',
+        'The IoT water bottle needs to be calibrated for accurate patient monitoring. Would you like to calibrate it now?',
+        [
+          { text: 'Later', style: 'cancel' },
+          { text: 'Calibrate Now', onPress: () => setShowCalibrationModal(true) },
+        ]
+      );
+    }
+  }, [isConnected, isCalibrated]);
 
   useEffect(() => {
     if (!patient) {
@@ -54,17 +119,35 @@ export default function PatientDetailScreen() {
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await refreshData();
     
     // Simulate fetching fresh IoT data
     setMockData(prev => ({
       ...prev,
-      currentWaterLevel: Math.random() * 0.8 + 0.2, // 20-100%
       dailyConsumed: Math.floor(Math.random() * 1000 + 800), // 800-1800ml
       lastDrinkTime: new Date(Date.now() - Math.random() * 2 * 60 * 60000), // 0-2 hours ago
     }));
     
     setTimeout(() => setRefreshing(false), 1000);
+  };
+
+  // Handle calibration completion
+  const handleCalibrationComplete = async () => {
+    try {
+      setIsCalibrated(true);
+      setShowCalibrationModal(false);
+      Alert.alert(
+        'Calibration Complete!',
+        'The IoT device has been successfully calibrated for accurate patient monitoring.',
+        [{ text: 'OK' }]
+      );
+    } catch (error) {
+      console.error('Error completing calibration:', error);
+      Alert.alert(
+        'Calibration Error',
+        'There was an issue completing the calibration. Please try again.',
+        [{ text: 'OK' }]
+      );
+    }
   };
 
   if (!patient) {
@@ -77,7 +160,7 @@ export default function PatientDetailScreen() {
     );
   }
 
-  const currentWaterAmount = Math.round(mockData.currentWaterLevel * patient.hydrationGoal);
+  const currentWaterAmount = Math.round(currentWaterLevel * patient.hydrationGoal);
   const progressPercentage = Math.min((mockData.dailyConsumed / patient.hydrationGoal) * 100, 100);
   const remainingGoal = Math.max(0, patient.hydrationGoal - mockData.dailyConsumed);
 
@@ -160,10 +243,10 @@ export default function PatientDetailScreen() {
             <View style={styles.connectionStatus}>
               <View style={[
                 styles.connectionDot, 
-                { backgroundColor: mockData.isDeviceConnected ? '#4CAF50' : '#F44336' }
+                { backgroundColor: isConnected ? '#4CAF50' : '#F44336' }
               ]} />
               <Text style={styles.connectionText}>
-                IoT Device {mockData.isDeviceConnected ? 'Connected' : 'Disconnected'}
+                IoT Device {isConnected ? 'Connected' : 'Disconnected'}
               </Text>
             </View>
           </View>
@@ -214,12 +297,12 @@ export default function PatientDetailScreen() {
 
           {/* Water Bottle Visualization */}
           <View style={styles.bottleContainer}>
-            <WaterBottle progress={mockData.currentWaterLevel} capacity={patient.hydrationGoal} />
+            <WaterBottle progress={currentWaterLevel} capacity={patient.hydrationGoal} />
             <Text style={styles.bottleStatus}>
               {currentWaterAmount}ml / {patient.hydrationGoal}ml
             </Text>
             <Text style={styles.bottleSubtext}>
-              Current Bottle Level: {Math.round(mockData.currentWaterLevel * 100)}%
+              Current Bottle Level: {Math.round(currentWaterLevel * 100)}%
             </Text>
             <Text style={styles.lastDrinkText}>
               Last drink: {getLastDrinkText()}
@@ -262,12 +345,12 @@ export default function PatientDetailScreen() {
           {/* Device Information */}
           <View style={styles.deviceInfoContainer}>
             <Text style={styles.sectionTitle}>Smart Bottle Status</Text>
-            <View style={[styles.deviceInfo, { borderLeftColor: mockData.isDeviceConnected ? '#4CAF50' : '#F44336' }]}>
+            <View style={[styles.deviceInfo, { borderLeftColor: isConnected ? '#4CAF50' : '#F44336' }]}>
               <Text style={styles.deviceInfoText}>
-                📱 Status: {mockData.isDeviceConnected ? 'Connected' : 'Disconnected'}
+                📱 Status: {isConnected ? 'Connected' : 'Disconnected'}
               </Text>
               <Text style={styles.deviceInfoText}>
-                💧 Water Level: {(mockData.currentWaterLevel * 100).toFixed(1)}%
+                💧 Water Level: {(currentWaterLevel * 100).toFixed(1)}%
               </Text>
               <Text style={styles.deviceInfoText}>
                 🕐 Last Update: {mockData.lastDrinkTime.toLocaleTimeString()}
@@ -281,6 +364,42 @@ export default function PatientDetailScreen() {
               <Text style={styles.deviceInfoText}>
                 🔋 Device: {patient.deviceIds.length > 0 ? 'Active' : 'Not Assigned'}
               </Text>
+              <Text style={styles.deviceInfoText}>
+                📏 Calibrated: {isCalibrated ? 'Yes' : 'No'}
+              </Text>
+            </View>
+            
+            {/* Device Control Buttons */}
+            <View style={styles.deviceButtons}>
+              <TouchableOpacity
+                style={[
+                  styles.deviceActionButton, 
+                  { backgroundColor: isConnected ? '#f44336' : '#2196F3' }
+                ]}
+                onPress={isConnected ? disconnectDevice : () => {
+                  scanForDevices();
+                  setTimeout(() => connectToDevice(), 2000); // Auto-connect after scan
+                }}
+                disabled={isScanning}
+              >
+                <Text style={styles.deviceActionButtonText}>
+                  {isScanning ? '🔍 Scanning...' : isConnected ? '🔌 Disconnect' : '📡 Connect'}
+                </Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                style={[
+                  styles.deviceActionButton,
+                  styles.calibrateButton,
+                  { opacity: isConnected ? 1 : 0.5 }
+                ]}
+                onPress={() => setShowCalibrationModal(true)}
+                disabled={!isConnected}
+              >
+                <Text style={styles.deviceActionButtonText}>
+                  ⚙️ {isCalibrated ? 'Recalibrate' : 'Calibrate'}
+                </Text>
+              </TouchableOpacity>
             </View>
           </View>
 
@@ -310,6 +429,16 @@ export default function PatientDetailScreen() {
           <View style={styles.bottomSpacing} />
         </ScrollView>
       </LinearGradient>
+
+      {/* Simple Calibration Modal for IoT device calibration */}
+      <SimpleCalibrationModal
+        visible={showCalibrationModal}
+        onClose={() => setShowCalibrationModal(false)}
+        onComplete={async (calibration) => {
+          await handleCalibrationComplete();
+        }}
+        sensorData={sensorData}
+      />
     </SafeAreaView>
   );
 }
@@ -578,5 +707,24 @@ const styles = StyleSheet.create({
   },
   bottomSpacing: {
     height: Spacing.xxl,
+  },
+  deviceButtons: {
+    flexDirection: 'row',
+    marginTop: Spacing.md,
+    gap: Spacing.sm,
+  },
+  deviceActionButton: {
+    flex: 1,
+    paddingVertical: Spacing.sm,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  calibrateButton: {
+    backgroundColor: '#9C27B0',
+  },
+  deviceActionButtonText: {
+    ...Typography.caption,
+    color: 'white',
+    fontWeight: '600',
   },
 });

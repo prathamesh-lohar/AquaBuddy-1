@@ -10,7 +10,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
 
-import { DayRecord } from '../../types';
+import { DayRecord, WaterIntake } from '../../types';
 import { StorageService } from '../../utils/storage';
 import { HistoryChart } from '../../components/HistoryChart';
 import { Colors, Typography, Spacing } from '../../constants/theme';
@@ -31,13 +31,75 @@ export default function HistoryScreen() {
       const startOfWeek = new Date(today);
       startOfWeek.setDate(today.getDate() + mondayOffset);
       
-      const records = await StorageService.getWeekRecords(startOfWeek);
+      let records = await StorageService.getWeekRecords(startOfWeek);
+      
+      // Add sample data if no records exist
+      if (records.every(record => record.total === 0)) {
+        records = generateSampleWeekData(startOfWeek);
+        // Save sample data to storage
+        for (const record of records) {
+          await StorageService.saveDayRecord(record);
+        }
+      }
+      
       setWeekData(records);
     } catch (error) {
       console.error('Error loading week data:', error);
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const generateSampleWeekData = (startOfWeek: Date): DayRecord[] => {
+    const sampleData: DayRecord[] = [];
+    const dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    
+    for (let i = 0; i < 7; i++) {
+      const date = new Date(startOfWeek);
+      date.setDate(startOfWeek.getDate() + i);
+      const dateString = date.toISOString().split('T')[0];
+      
+      // Generate realistic water intake data
+      const goal = 3000; // 3L daily goal
+      const baseIntake = 2000 + Math.random() * 1500; // 2-3.5L variation
+      const total = Math.floor(baseIntake);
+      
+      // Generate intake sessions throughout the day
+      const intakes: WaterIntake[] = [];
+      let currentTime = new Date(date);
+      currentTime.setHours(7, 0, 0, 0); // Start at 7 AM
+      
+      let remainingWater = total;
+      let sessionCount = 6 + Math.floor(Math.random() * 4); // 6-10 sessions per day
+      
+      for (let j = 0; j < sessionCount && remainingWater > 0; j++) {
+        const sessionAmount = Math.min(
+          remainingWater,
+          100 + Math.random() * 400 // 100-500ml per session
+        );
+        
+        intakes.push({
+          id: `${dateString}-${j}`,
+          amount: Math.floor(sessionAmount),
+          timestamp: new Date(currentTime),
+          date: dateString,
+        });
+        
+        remainingWater -= sessionAmount;
+        // Move to next session (1-3 hours later)
+        currentTime.setHours(currentTime.getHours() + 1 + Math.random() * 2);
+      }
+      
+      sampleData.push({
+        date: dateString,
+        total,
+        goal,
+        intakes,
+        achieved: total >= goal * 0.8, // Achieved if >= 80% of goal
+      });
+    }
+    
+    return sampleData;
   };
 
   useEffect(() => {
@@ -80,7 +142,7 @@ export default function HistoryScreen() {
       <StatusBar style="dark" />
       
       <LinearGradient
-        colors={Colors.background.gradient}
+        colors={['#E3F2FD', '#FFFFFF']}
         style={styles.gradient}
       >
         <ScrollView
@@ -110,7 +172,7 @@ export default function HistoryScreen() {
             
             <View style={styles.statsGrid}>
               <View style={styles.statCard}>
-                <Text style={styles.statValue}>{Math.round(stats.totalConsumed / 1000)}L</Text>
+                <Text style={styles.statValue}>{(stats.totalConsumed / 1000).toFixed(1)}L</Text>
                 <Text style={styles.statLabel}>Total Consumed</Text>
               </View>
               
@@ -129,16 +191,41 @@ export default function HistoryScreen() {
                 <Text style={styles.statLabel}>Weekly Goal</Text>
               </View>
             </View>
+
+            {/* Additional weekly metrics */}
+            <View style={styles.weeklyMetrics}>
+              <View style={styles.metricRow}>
+                <Text style={styles.metricLabel}>Best Day:</Text>
+                <Text style={styles.metricValue}>
+                  {weekData.length > 0 ? 
+                    new Date(weekData.reduce((best, day) => 
+                      day.total > best.total ? day : best
+                    ).date).toLocaleDateString('en-US', { weekday: 'long' }) : 'N/A'}
+                </Text>
+              </View>
+              <View style={styles.metricRow}>
+                <Text style={styles.metricLabel}>Consistency Score:</Text>
+                <Text style={styles.metricValue}>{Math.round((stats.daysAchieved / 7) * 100)}%</Text>
+              </View>
+            </View>
           </View>
 
           {/* Insights */}
           <View style={styles.insightsContainer}>
-            <Text style={styles.insightsTitle}>Insights</Text>
+            <Text style={styles.insightsTitle}>Personal Insights</Text>
             
             {stats.daysAchieved >= 5 && (
               <View style={styles.insightCard}>
                 <Text style={styles.insightText}>
-                  🎉 Great job! You've achieved your daily goal {stats.daysAchieved} days this week.
+                  🎉 Excellent! You've achieved your daily goal {stats.daysAchieved} days this week. You're building a great hydration habit!
+                </Text>
+              </View>
+            )}
+            
+            {stats.daysAchieved >= 3 && stats.daysAchieved < 5 && (
+              <View style={styles.insightCard}>
+                <Text style={styles.insightText}>
+                  � Good progress! You've hit your goal {stats.daysAchieved} days this week. Try to be more consistent for better results.
                 </Text>
               </View>
             )}
@@ -146,7 +233,7 @@ export default function HistoryScreen() {
             {stats.daysAchieved < 3 && (
               <View style={styles.insightCard}>
                 <Text style={styles.insightText}>
-                  💪 You can do better! Try setting reminders to drink water throughout the day.
+                  💪 Room for improvement! Set hourly reminders and keep a water bottle nearby to stay on track.
                 </Text>
               </View>
             )}
@@ -154,10 +241,27 @@ export default function HistoryScreen() {
             {stats.weeklyPercentage > 100 && (
               <View style={styles.insightCard}>
                 <Text style={styles.insightText}>
-                  🌟 Amazing! You've exceeded your weekly hydration goal. Keep it up!
+                  🌟 Outstanding! You've exceeded your weekly hydration goal by {Math.round(stats.weeklyPercentage - 100)}%. Keep up the amazing work!
                 </Text>
               </View>
             )}
+
+            {stats.averageDaily > 0 && (
+              <View style={styles.insightCard}>
+                <Text style={styles.insightText}>
+                  📊 Your daily average is {Math.round(stats.averageDaily)}ml. 
+                  {stats.averageDaily >= 2500 
+                    ? " That's great hydration!" 
+                    : " Try to increase by 200-300ml daily for optimal health."}
+                </Text>
+              </View>
+            )}
+
+            <View style={styles.insightCard}>
+              <Text style={styles.insightText}>
+                💡 Tip: The best times to hydrate are upon waking, before meals, and during exercise. Spread your intake throughout the day for maximum benefit!
+              </Text>
+            </View>
           </View>
 
           <View style={styles.bottomSpacing} />
@@ -259,5 +363,27 @@ const styles = StyleSheet.create({
   },
   bottomSpacing: {
     height: Spacing.xxl,
+  },
+  weeklyMetrics: {
+    marginTop: Spacing.md,
+    paddingTop: Spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: '#E0E0E0',
+  },
+  metricRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: Spacing.xs,
+  },
+  metricLabel: {
+    ...Typography.body,
+    color: Colors.text.medium,
+    fontWeight: '500',
+  },
+  metricValue: {
+    ...Typography.body,
+    color: Colors.primary,
+    fontWeight: '600',
   },
 });

@@ -21,15 +21,16 @@ export default function ChallengesScreen() {
   const [refreshing, setRefreshing] = useState(false);
 
   const initializeChallenges = () => {
+    // Provide a compact set (5-7) of challenges with light progress for demo
     const challengesList: Challenge[] = [
       {
         id: '1',
         title: '7-Day Streak',
-        description: 'Achieve your daily goal for 7 consecutive days',
+        description: 'Maintain your hydration goal for 7 days in a row',
         target: 7,
-        progress: streakCount,
+        progress: Math.min(streakCount, 2), // lightly filled for demo
         completed: streakCount >= 7,
-        reward: '100 Points + Streak Master Badge',
+        reward: '100 Points + Streak Badge',
         icon: 'calendar',
       },
       {
@@ -37,39 +38,49 @@ export default function ChallengesScreen() {
         title: 'Hydration Hero',
         description: 'Drink 3 liters of water today',
         target: 3000,
-        progress: currentTotal,
+        progress: Math.min(currentTotal, 900), // ~30% filled
         completed: currentTotal >= 3000,
         reward: '50 Points + Hero Badge',
         icon: 'trophy',
       },
       {
         id: '3',
-        title: 'Morning Booster',
-        description: 'Drink 500ml within 2 hours of waking up',
+        title: 'Morning Boost',
+        description: 'Have 500ml in the morning',
         target: 500,
-        progress: Math.min(currentTotal, 500), // Simplified for demo
-        completed: currentTotal >= 500,
-        reward: '25 Points + Early Bird Badge',
+        progress: Math.min(currentTotal * 0.4, 250), // partially filled
+        completed: currentTotal >= 1000,
+        reward: '25 Points + Early Bird',
         icon: 'target',
       },
       {
         id: '4',
         title: 'Weekly Warrior',
-        description: 'Complete 21 liters this week (3L/day × 7 days)',
+        description: 'Reach 21L this week',
         target: 21000,
-        progress: currentTotal * 7, // Simplified calculation for demo
-        completed: (currentTotal * 7) >= 21000,
+        progress: Math.min(Math.floor(currentTotal * 3 + 4000), 21000),
+        completed: false,
         reward: '200 Points + Warrior Badge',
         icon: 'trophy',
       },
       {
         id: '5',
         title: 'Consistency Champion',
-        description: 'Log water intake 5 times in one day',
-        target: 5,
-        progress: 3, // Mock data - would track actual intake count
+        description: 'Log 6 drinking sessions today',
+        target: 6,
+        progress: Math.min(Math.floor(currentTotal / 450), 3), // lightly filled
         completed: false,
         reward: '30 Points + Champion Badge',
+        icon: 'target',
+      },
+      {
+        id: '6',
+        title: 'Steady Sipper',
+        description: 'Drink every 2 hours',
+        target: 8,
+        progress: Math.min(Math.floor(currentTotal / 500), 2),
+        completed: false,
+        reward: '40 Points + Steady Badge',
         icon: 'target',
       },
     ];
@@ -97,14 +108,19 @@ export default function ChallengesScreen() {
 
   const completedChallenges = challenges.filter(c => c.completed);
   const activeChallenges = challenges.filter(c => !c.completed);
-  const totalPoints = completedChallenges.length * 50; // Simplified point calculation
+  
+  // Calculate points based on challenge rewards
+  const totalPoints = completedChallenges.reduce((sum, challenge) => {
+    const pointsFromReward = challenge.reward.match(/(\d+)\s*Points/);
+    return sum + (pointsFromReward ? parseInt(pointsFromReward[1], 10) : 0);
+  }, 0);
 
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar style="dark" />
       
       <LinearGradient
-        colors={Colors.background.gradient}
+        colors={['#E3F2FD', '#FFFFFF']}
         style={styles.gradient}
       >
         <ScrollView

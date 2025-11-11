@@ -29,7 +29,8 @@ import { WaterBottle } from '../../components/WaterBottle';
 import { ProgressBar } from '../../components/ProgressBar';
 import { StatCard } from '../../components/StatCard';
 import { TipCard } from '../../components/TipCard';
-import { CalibrationModal } from '../../components/CalibrationModal';
+// import { CalibrationModal } from '../../components/CalibrationModal';
+import { SimpleCalibrationModal } from '../../components/SimpleCalibrationModal';
 import { NotifyButton } from '../../components/NotifyButton';
 
 import { Colors, Typography, Spacing } from '../../constants/theme';
@@ -632,7 +633,7 @@ You can now track your water consumption accurately.`,
           {/* IoT Device Info & Controls */}
           <View style={styles.iotInfoContainer}>
             <Text style={styles.sectionTitle}>Smart Bottle Status</Text>
-            <View style={[styles.iotInfo, { borderLeftColor: isConnected ? '#4CAF50' : '#F44336' }]}>
+            {/* <View style={[styles.iotInfo, { borderLeftColor: isConnected ? '#4CAF50' : '#F44336' }]}>
               <Text style={styles.iotInfoText}>
                 📱 Status: {isConnected ? 'Connected' : 'Disconnected'}
               </Text>
@@ -672,7 +673,7 @@ You can now track your water consumption accurately.`,
                   ❌ Error: {connectionError}
                 </Text>
               )}
-            </View>
+            </View> */}
             
             {/* Bluetooth Control Buttons */}
             <View style={styles.bluetoothControls}>
@@ -849,8 +850,8 @@ You can now track your water consumption accurately.`,
           <View style={styles.bottomSpacing} />
         </ScrollView>
 
-        {/* Calibration Modal */}
-        <CalibrationModal
+        {/* Simple Calibration Modal */}
+        <SimpleCalibrationModal
           visible={showCalibrationModal}
           onClose={() => setShowCalibrationModal(false)}
           onComplete={handleCalibrationComplete}

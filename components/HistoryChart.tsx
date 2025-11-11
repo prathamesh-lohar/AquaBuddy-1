@@ -16,7 +16,9 @@ export const HistoryChart: React.FC<HistoryChartProps> = ({ weekData }) => {
   const maxGoal = Math.max(...weekData.map(day => day.goal));
 
   const getBarHeight = (total: number, goal: number) => {
-    const percentage = total / Math.max(goal, maxGoal);
+    // Protect against zero goal and clamp to 100% for visual consistency
+    const safeGoal = Math.max(goal, 1);
+    const percentage = Math.min(total / safeGoal, 1);
     return Math.max(percentage * chartHeight, 2);
   };
 
@@ -36,7 +38,8 @@ export const HistoryChart: React.FC<HistoryChartProps> = ({ weekData }) => {
       <View style={styles.chartContainer}>
         {weekData.map((day, index) => {
           const barHeight = getBarHeight(day.total, day.goal);
-          const achievementPercentage = (day.total / day.goal) * 100;
+          // Clamp displayed percentage to 100% so UI doesn't show >100%
+          const achievementPercentage = Math.min((day.total / Math.max(day.goal, 1)) * 100, 100);
           
           return (
             <View key={day.date} style={styles.barContainer}>
