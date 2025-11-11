@@ -49,6 +49,31 @@ export interface Challenge {
   icon: string;
 }
 
+export interface Patient {
+  id: string;
+  name: string;
+  age?: number;
+  weight?: number; // for goal calculation
+  notes?: string;
+  deviceId?: string; // Bluetooth device ID
+  deviceCalibration?: DeviceCalibration;
+  dailyGoal: number;
+  currentWaterLevel: number; // real-time from device
+  lastUpdated: string; // ISO timestamp
+  todayIntakes: WaterIntake[];
+  isConnected: boolean; // device connection status
+  createdAt: string;
+  lastSync: string; // last device sync
+}
+
+export interface CaretakerProfile {
+  id: string;
+  name: string;
+  email: string;
+  patients: Patient[];
+  activePatientId?: string; // currently monitoring
+}
+
 export interface AppState {
   user: UserProfile | null;
   todayIntake: WaterIntake[];

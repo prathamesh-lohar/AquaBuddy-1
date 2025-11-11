@@ -185,6 +185,8 @@ export const AddPatientModal: React.FC<AddPatientModalProps> = ({
 
       const patientId = await addPatient(patientData);
       
+      console.log('✅ Patient added successfully with ID:', patientId);
+      
       Alert.alert(
         'Patient Added Successfully! ✅',
         `${formData.name} has been added to your patient list with device ${selectedDevice?.name || 'Unknown Device'}.`,
@@ -192,6 +194,7 @@ export const AddPatientModal: React.FC<AddPatientModalProps> = ({
           { 
             text: 'OK', 
             onPress: () => {
+              console.log('🔄 Calling onSuccess callback');
               onSuccess();
               onClose();
             }

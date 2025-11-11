@@ -95,6 +95,12 @@ export const CaretakerAuthProvider: React.FC<CaretakerAuthProviderProps> = ({ ch
   // Load managed users
   const loadManagedUsers = async (caretakerId: string) => {
     try {
+      // In development mode, don't reload from Firestore - preserve local state
+      if (__DEV__) {
+        console.log('🔄 loadManagedUsers in dev mode - skipping to preserve local state');
+        return;
+      }
+
       // Get caretaker-user relationships
       const relationshipsQuery = query(
         collection(db, 'caretaker_relationships'),
@@ -229,7 +235,7 @@ export const CaretakerAuthProvider: React.FC<CaretakerAuthProviderProps> = ({ ch
           updatedAt: new Date()
         };
 
-        // Create empty mock data for development - patients will be added dynamically
+        // Start with empty patient list for testing patient addition
         const mockManagedUsers: PatientUser[] = [];
         
         // Create empty alerts array
@@ -240,6 +246,9 @@ export const CaretakerAuthProvider: React.FC<CaretakerAuthProviderProps> = ({ ch
         setManagedUsers(mockManagedUsers);
         setAlerts(mockAlerts);
         setIsLoading(false);
+        
+        console.log('✅ Mock caretaker signed in:', mockCaretaker.name);
+        console.log('👥 Initial managed users:', mockManagedUsers.length);
         return;
       }
 
@@ -277,6 +286,14 @@ export const CaretakerAuthProvider: React.FC<CaretakerAuthProviderProps> = ({ ch
   // Refresh data
   const refreshData = async () => {
     if (caretaker) {
+      // In development mode, don't reload managed users to preserve locally added patients
+      if (__DEV__) {
+        console.log('🔄 Refresh in dev mode - preserving locally added patients');
+        await loadAlerts(caretaker.id);
+        return;
+      }
+      
+      // In production, reload from Firestore
       await loadManagedUsers(caretaker.id);
       await loadAlerts(caretaker.id);
     }
@@ -315,6 +332,8 @@ export const CaretakerAuthProvider: React.FC<CaretakerAuthProviderProps> = ({ ch
         throw new Error('No caretaker logged in');
       }
 
+      console.log('🏥 Adding new patient:', patientData.name);
+
       // In development mode, add to local state
       if (__DEV__) {
         const newPatient: PatientUser = {
@@ -324,7 +343,15 @@ export const CaretakerAuthProvider: React.FC<CaretakerAuthProviderProps> = ({ ch
           updatedAt: new Date(),
         };
         
-        setManagedUsers(prev => [...prev, newPatient]);
+        console.log('📝 Created patient record:', newPatient);
+        
+        setManagedUsers(prev => {
+          const updated = [...prev, newPatient];
+          console.log('👥 Updated managed users list. Total patients:', updated.length);
+          return updated;
+        });
+        
+        console.log('✅ Patient added to local state successfully');
         return newPatient.id;
       }
 
@@ -332,7 +359,7 @@ export const CaretakerAuthProvider: React.FC<CaretakerAuthProviderProps> = ({ ch
       // This would be implemented with actual Firebase integration
       throw new Error('Production patient addition not yet implemented');
     } catch (error) {
-      console.error('Error adding patient:', error);
+      console.error('❌ Error adding patient:', error);
       throw error;
     }
   };

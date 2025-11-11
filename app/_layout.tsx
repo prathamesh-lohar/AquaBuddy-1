@@ -7,6 +7,43 @@ import { AuthProvider } from "@/providers/auth-provider";
 import { HydrationProvider } from "@/providers/hydration-proider";
 import { CaretakerAuthProvider } from "@/providers/caretaker-auth-provider";
 import 'react-native-get-random-values';
+
+// Set up global error handler for BLE and other uncaught promise rejections
+const setupGlobalErrorHandlers = () => {
+  // Handle unhandled promise rejections
+  if (typeof global !== 'undefined' && !global.onunhandledrejection) {
+    global.onunhandledrejection = (event) => {
+      if (event && event.reason) {
+        const error = event.reason;
+        // Check if it's a BLE error
+        if (typeof error === 'object' && error.name === 'BleError') {
+          console.warn('🔄 BLE Error caught globally (suppressed):', error.message || error);
+          // Prevent the error from crashing the app
+          event.preventDefault?.();
+          return;
+        }
+      }
+      
+      console.error('❌ Unhandled Promise rejection:', event?.reason);
+    };
+  }
+  
+  // For React Native console errors, filter out known BLE errors
+  const originalError = console.error;
+  console.error = (...args) => {
+    const firstArg = args[0];
+    if (typeof firstArg === 'string' && (
+      firstArg.includes('BleError: Unknown error') ||
+      firstArg.includes('Uncaught (in promise') && firstArg.includes('BleError')
+    )) {
+      console.warn('🔄 BLE Error (handled):', ...args);
+      return;
+    }
+    // Call original console.error for all other errors
+    originalError(...args);
+  };
+};
+
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
 
@@ -51,6 +88,9 @@ function RootLayoutNav() {
 
 export default function RootLayout() {
   useEffect(() => {
+    // Set up global error handlers for BLE errors
+    setupGlobalErrorHandlers();
+    
     // Keep splash screen visible while we fetch resources
     const prepare = async () => {
       try {

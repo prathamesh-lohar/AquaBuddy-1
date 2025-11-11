@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { WaterIntake, DayRecord, UserProfile, DeviceCalibration } from '../types';
+import { WaterIntake, DayRecord, UserProfile, DeviceCalibration, Patient, CaretakerProfile } from '../types';
 
 const KEYS = {
   USER_PROFILE: 'user_profile',
@@ -7,6 +7,9 @@ const KEYS = {
   DAILY_RECORDS: 'daily_records',
   STREAK_COUNT: 'streak_count',
   DEVICE_CALIBRATION: 'device_calibration',
+  CARETAKER_PROFILE: 'caretaker_profile',
+  PATIENTS: 'patients',
+  ACTIVE_PATIENT: 'active_patient',
 };
 
 export const StorageService = {
@@ -151,6 +154,182 @@ export const StorageService = {
       await AsyncStorage.removeItem(KEYS.DEVICE_CALIBRATION);
     } catch (error) {
       console.error('Error clearing device calibration:', error);
+    }
+  },
+
+  // Caretaker Profile Management
+  async saveCaretakerProfile(profile: CaretakerProfile): Promise<void> {
+    try {
+      await AsyncStorage.setItem(KEYS.CARETAKER_PROFILE, JSON.stringify(profile));
+    } catch (error) {
+      console.error('Error saving caretaker profile:', error);
+    }
+  },
+
+  async getCaretakerProfile(): Promise<CaretakerProfile | null> {
+    try {
+      const data = await AsyncStorage.getItem(KEYS.CARETAKER_PROFILE);
+      return data ? JSON.parse(data) : null;
+    } catch (error) {
+      console.error('Error getting caretaker profile:', error);
+      return null;
+    }
+  },
+
+  // Patient Management
+  async savePatients(patients: Patient[]): Promise<void> {
+    try {
+      await AsyncStorage.setItem(KEYS.PATIENTS, JSON.stringify(patients));
+    } catch (error) {
+      console.error('Error saving patients:', error);
+    }
+  },
+
+  async getPatients(): Promise<Patient[]> {
+    try {
+      const data = await AsyncStorage.getItem(KEYS.PATIENTS);
+      return data ? JSON.parse(data) : [];
+    } catch (error) {
+      console.error('Error getting patients:', error);
+      return [];
+    }
+  },
+
+  async addPatient(patient: Patient): Promise<void> {
+    try {
+      const patients = await this.getPatients();
+      const newPatient = {
+        ...patient,
+        id: patient.id || Date.now().toString(),
+        createdAt: new Date().toISOString(),
+        lastSync: new Date().toISOString(),
+        lastUpdated: new Date().toISOString(),
+        isConnected: false,
+        currentWaterLevel: 0,
+        todayIntakes: [],
+      };
+      patients.push(newPatient);
+      await this.savePatients(patients);
+    } catch (error) {
+      console.error('Error adding patient:', error);
+    }
+  },
+
+  async updatePatient(patientId: string, updates: Partial<Patient>): Promise<void> {
+    try {
+      const patients = await this.getPatients();
+      const index = patients.findIndex(p => p.id === patientId);
+      if (index !== -1) {
+        patients[index] = {
+          ...patients[index],
+          ...updates,
+          lastUpdated: new Date().toISOString(),
+        };
+        await this.savePatients(patients);
+      }
+    } catch (error) {
+      console.error('Error updating patient:', error);
+    }
+  },
+
+  async deletePatient(patientId: string): Promise<void> {
+    try {
+      const patients = await this.getPatients();
+      const filtered = patients.filter(p => p.id !== patientId);
+      await this.savePatients(filtered);
+    } catch (error) {
+      console.error('Error deleting patient:', error);
+    }
+  },
+
+  async getPatientById(patientId: string): Promise<Patient | null> {
+    try {
+      const patients = await this.getPatients();
+      return patients.find(p => p.id === patientId) || null;
+    } catch (error) {
+      console.error('Error getting patient by id:', error);
+      return null;
+    }
+  },
+
+  // Active Patient Management
+  async setActivePatient(patientId: string): Promise<void> {
+    try {
+      await AsyncStorage.setItem(KEYS.ACTIVE_PATIENT, patientId);
+    } catch (error) {
+      console.error('Error setting active patient:', error);
+    }
+  },
+
+  async getActivePatient(): Promise<Patient | null> {
+    try {
+      const patientId = await AsyncStorage.getItem(KEYS.ACTIVE_PATIENT);
+      if (patientId) {
+        return await this.getPatientById(patientId);
+      }
+      return null;
+    } catch (error) {
+      console.error('Error getting active patient:', error);
+      return null;
+    }
+  },
+
+  // Patient Real-time Data Updates
+  async updatePatientWaterLevel(patientId: string, waterLevel: number, sensorData?: any): Promise<void> {
+    try {
+      const updates: Partial<Patient> = {
+        currentWaterLevel: waterLevel,
+        lastSync: new Date().toISOString(),
+        isConnected: true,
+      };
+
+      // If water level changed significantly, add it as an intake
+      const patient = await this.getPatientById(patientId);
+      if (patient && patient.currentWaterLevel > waterLevel) {
+        const intakeAmount = patient.currentWaterLevel - waterLevel;
+        if (intakeAmount > 50) { // Only record significant changes
+          const newIntake: WaterIntake = {
+            id: Date.now().toString(),
+            amount: Math.round(intakeAmount),
+            timestamp: new Date(),
+            date: new Date().toISOString().split('T')[0],
+          };
+          
+          const todayIntakes = [...(patient.todayIntakes || []), newIntake];
+          updates.todayIntakes = todayIntakes;
+        }
+      }
+
+      await this.updatePatient(patientId, updates);
+    } catch (error) {
+      console.error('Error updating patient water level:', error);
+    }
+  },
+
+  async updatePatientDeviceStatus(patientId: string, isConnected: boolean): Promise<void> {
+    try {
+      await this.updatePatient(patientId, { isConnected });
+    } catch (error) {
+      console.error('Error updating patient device status:', error);
+    }
+  },
+
+  // Calibration Management per Patient
+  async savePatientCalibration(patientId: string, calibration: DeviceCalibration): Promise<void> {
+    try {
+      await this.updatePatient(patientId, { deviceCalibration: calibration });
+    } catch (error) {
+      console.error('Error saving patient calibration:', error);
+    }
+  },
+
+  async getPatientCalibration(patientId: string): Promise<DeviceCalibration | null> {
+    try {
+      const patient = await this.getPatientById(patientId);
+      return patient?.deviceCalibration || null;
+    } catch (error) {
+      console.error('Error getting patient calibration:', error);
+      return null;
     }
   },
 };

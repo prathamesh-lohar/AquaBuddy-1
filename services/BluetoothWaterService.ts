@@ -4,6 +4,7 @@ import { Platform, Alert, PermissionsAndroid } from 'react-native';
 import { decode as atob } from 'base-64';
 import { SensorData } from '../types';
 import { calibrationService } from './CalibrationService';
+import { StorageService } from '../utils/storage';
 
 // IoT device configuration - Match your ESP32 code
 const SERVICE_UUID = '4fafc201-1fb5-459e-8fcc-c5c9c331914b';
@@ -31,6 +32,7 @@ export class BluetoothWaterService {
   private isConnected = false;
   private isScanning = false;
   private isConnecting = false;
+  private activePatientId: string | null = null; // Track which patient is using this device
 
   // Event listeners
   private dataListeners: Array<(data: SensorData) => void> = [];
@@ -45,7 +47,38 @@ export class BluetoothWaterService {
 
   constructor() {
     this.manager = new BleManager();
-    this.initialize();
+    this.initialize().catch(error => {
+      console.error('❌ Failed to initialize Bluetooth service in constructor:', error);
+    });
+    
+    // Set up global error handler for uncaught BLE errors
+    this.setupGlobalErrorHandler();
+  }
+
+  // Set up global error handler to catch uncaught BLE promise rejections
+  private setupGlobalErrorHandler() {
+    // Override BLE manager error handling
+    if (this.manager && typeof this.manager.onStateChange === 'function') {
+      try {
+        this.manager.onStateChange((state) => {
+          console.log(`📡 Bluetooth state: ${state}`);
+        }, true);
+      } catch (error) {
+        console.error('❌ Error setting up state change listener:', error);
+      }
+    }
+
+    // Add process-level unhandled promise rejection handler
+    if (typeof process !== 'undefined' && process.on) {
+      process.on('unhandledRejection', (reason, promise) => {
+        if (reason && typeof reason === 'object' && 'name' in reason && reason.name === 'BleError') {
+          console.error('❌ Unhandled BLE Promise rejection:', reason);
+          // Don't re-throw BLE errors, just log them
+          return;
+        }
+        console.error('❌ Unhandled Promise rejection:', reason);
+      });
+    }
   }
 
   // Add method to reinitialize the BLE manager
@@ -53,12 +86,13 @@ export class BluetoothWaterService {
     try {
       console.log('🔄 Reinitializing Bluetooth service...');
       
-      // Clean up existing manager
+      // Clean up existing manager safely
       if (this.manager) {
         try {
+          await this.disconnect();
           this.manager.destroy();
         } catch (error) {
-          console.log('Manager already destroyed');
+          console.log('❌ Error cleaning up manager:', error);
         }
       }
 
@@ -68,8 +102,11 @@ export class BluetoothWaterService {
       // Create new manager
       this.manager = new BleManager();
       
-      // Initialize the new manager
+      // Initialize the new manager with error handling
       await this.initialize();
+      
+      // Re-setup error handlers
+      this.setupGlobalErrorHandler();
       
       console.log('✅ Bluetooth service reinitialized');
       return true;
@@ -89,6 +126,7 @@ export class BluetoothWaterService {
         return;
       }
 
+      // Set up state change listener with error handling
       const subscription = this.manager.onStateChange((state) => {
         console.log(`📡 Bluetooth state: ${state}`);
         if (state === 'PoweredOn') {
@@ -99,7 +137,8 @@ export class BluetoothWaterService {
 
       console.log('✅ Bluetooth service initialized');
     } catch (error) {
-      console.error('❌ Failed to initialize Bluetooth:', error);
+      console.error('❌ Error initializing Bluetooth service:', error);
+      throw error;
     }
   }
 
@@ -181,38 +220,59 @@ export class BluetoothWaterService {
       this.isScanning = true;
       this.scannedDevices.clear();
 
-      return new Promise((resolve) => {
+      return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
-          this.manager.stopDeviceScan();
+          try {
+            this.manager.stopDeviceScan();
+          } catch (stopError) {
+            console.error('❌ Error stopping scan:', stopError);
+          }
           this.isScanning = false;
           const devices = Array.from(this.scannedDevices.values());
           console.log(`✅ Scan completed. Found ${devices.length} devices`);
           resolve(devices);
         }, timeoutMs);
 
-        this.manager.startDeviceScan(null, { allowDuplicates: false }, (error, device) => {
-          if (error) {
-            console.error('❌ Scan error:', error);
-            clearTimeout(timeout);
-            this.manager.stopDeviceScan();
-            this.isScanning = false;
-            resolve([]);
-            return;
-          }
+        try {
+          this.manager.startDeviceScan(null, { allowDuplicates: false }, (error, device) => {
+            if (error) {
+              console.error('❌ Scan error:', error);
+              clearTimeout(timeout);
+              try {
+                this.manager.stopDeviceScan();
+              } catch (stopError) {
+                console.error('❌ Error stopping scan after error:', stopError);
+              }
+              this.isScanning = false;
+              // Don't reject, just resolve with empty array to prevent uncaught promise
+              resolve([]);
+              return;
+            }
 
-          if (device && (device.name || device.localName)) {
-            const bt: BluetoothDevice = {
-              id: device.id,
-              name: device.name,
-              localName: device.localName,
-              rssi: device.rssi ?? undefined,
-              serviceUUIDs: device.serviceUUIDs ?? undefined,
-            };
+            if (device && (device.name || device.localName)) {
+              const bt: BluetoothDevice = {
+                id: device.id,
+                name: device.name,
+                localName: device.localName,
+                rssi: device.rssi ?? undefined,
+                serviceUUIDs: device.serviceUUIDs ?? undefined,
+              };
 
-            this.scannedDevices.set(device.id, bt);
-            this.notifyDeviceListeners(Array.from(this.scannedDevices.values()));
-          }
-        });
+              this.scannedDevices.set(device.id, bt);
+              
+              try {
+                this.notifyDeviceListeners(Array.from(this.scannedDevices.values()));
+              } catch (listenerError) {
+                console.error('❌ Error notifying device listeners:', listenerError);
+              }
+            }
+          });
+        } catch (startScanError) {
+          console.error('❌ Error starting device scan:', startScanError);
+          clearTimeout(timeout);
+          this.isScanning = false;
+          resolve([]);
+        }
       });
     } catch (error) {
       console.error('❌ Failed to scan for devices:', error);
@@ -224,9 +284,14 @@ export class BluetoothWaterService {
   // Stop scanning for devices
   public stopScanning() {
     if (this.isScanning) {
-      this.manager.stopDeviceScan();
-      this.isScanning = false;
-      console.log('⏹️ Device scan stopped');
+      try {
+        this.manager.stopDeviceScan();
+        this.isScanning = false;
+        console.log('⏹️ Device scan stopped');
+      } catch (error) {
+        console.error('❌ Error stopping device scan:', error);
+        this.isScanning = false;
+      }
     }
   }
 
@@ -296,16 +361,32 @@ export class BluetoothWaterService {
       // Start monitoring
       await this.startDataMonitoring();
 
-      // Disconnection handler
+      // Disconnection handler with error handling
       this.device.onDisconnected((error, d) => {
         if (error) console.error('❌ Disconnection error:', error);
         console.log('📱 Device disconnected:', d?.name || 'Unknown');
-        this.handleDisconnection();
+        try {
+          this.handleDisconnection();
+        } catch (disconnectError) {
+          console.error('❌ Error handling disconnection:', disconnectError);
+        }
       });
 
       this.isConnected = true;
       this.isConnecting = false;
-      this.notifyConnectionListeners(true);
+
+      // Update patient connection status
+      if (this.activePatientId) {
+        await this.updatePatientConnectionStatus(this.activePatientId, true);
+        // Load patient's specific calibration
+        await this.loadPatientCalibration(this.activePatientId);
+      }
+      
+      try {
+        this.notifyConnectionListeners(true);
+      } catch (listenerError) {
+        console.error('❌ Error notifying connection listeners:', listenerError);
+      }
 
       console.log('🎉 Successfully connected to device!');
       return true;
@@ -322,48 +403,60 @@ export class BluetoothWaterService {
     if (!this.characteristic) throw new Error('No characteristic available for monitoring');
 
     console.log('📊 Starting data monitoring...');
-    this.characteristic.monitor((error, characteristic) => {
-      if (error) {
-        console.error('❌ Monitoring error:', error);
-        return;
-      }
-
-      if (characteristic?.value) {
-        try {
-          // BLE values are base64-encoded; decode to string
-          const rawData = atob(characteristic.value);
-          console.log(`📨 Received data: ${rawData}`);
-
-          const sensorData = this.parseReceivedData(rawData);
-          if (sensorData) {
-            // Calculate water level using calibration service if needed
-            let waterLevel = sensorData.waterLevel;
-            
-            // If waterLevel is 0 and we have calibration, calculate it
-            if (waterLevel === 0 && calibrationService.isDeviceCalibrated()) {
-              waterLevel = calibrationService.calculateWaterLevel(sensorData);
-            }
-
-            console.log(
-              `💧 Distance: ${sensorData.distance}mm, Water level: ${waterLevel.toFixed(1)}%`
-            );
-
-            // Add to calibration if in progress
-            if (calibrationService.isCalibrationInProgress()) {
-              calibrationService.addCalibrationReading(sensorData.distance);
-            }
-
-            // Update the sensor data with calculated water level
-            const finalSensorData = { ...sensorData, waterLevel };
-            this.notifyDataListeners(finalSensorData);
-          }
-        } catch (parseError) {
-          console.error('❌ Failed to parse received data:', parseError);
+    
+    try {
+      this.characteristic.monitor((error, characteristic) => {
+        if (error) {
+          console.error('❌ Monitoring error:', error);
+          // Don't throw here, just log - monitoring errors are common and should not crash the app
+          return;
         }
-      }
-    });
 
-    console.log('✅ Data monitoring started');
+        if (characteristic?.value) {
+          try {
+            // BLE values are base64-encoded; decode to string
+            const rawData = atob(characteristic.value);
+            console.log(`📨 Received data: ${rawData}`);
+
+            const sensorData = this.parseReceivedData(rawData);
+            if (sensorData) {
+              // Calculate water level using calibration service if needed
+              let waterLevel = sensorData.waterLevel;
+              
+              // If waterLevel is 0 and we have calibration, calculate it
+              if (waterLevel === 0 && calibrationService.isDeviceCalibrated()) {
+                waterLevel = calibrationService.calculateWaterLevel(sensorData);
+              }
+
+              console.log(
+                `💧 Distance: ${sensorData.distance}mm, Water level: ${waterLevel.toFixed(1)}%`
+              );
+
+              // Add to calibration if in progress
+              if (calibrationService.isCalibrationInProgress()) {
+                calibrationService.addCalibrationReading(sensorData.distance);
+              }
+
+              // Update the sensor data with calculated water level
+              const finalSensorData = { ...sensorData, waterLevel };
+              
+              try {
+                this.notifyDataListeners(finalSensorData);
+              } catch (listenerError) {
+                console.error('❌ Error notifying data listeners:', listenerError);
+              }
+            }
+          } catch (parseError) {
+            console.error('❌ Failed to parse received data:', parseError);
+          }
+        }
+      });
+
+      console.log('✅ Data monitoring started');
+    } catch (monitorError) {
+      console.error('❌ Failed to start monitoring:', monitorError);
+      throw monitorError;
+    }
   }
 
   // Parse data received from IoT device
@@ -570,8 +663,13 @@ export class BluetoothWaterService {
       }
     } catch (error) {
       console.error('❌ Error during disconnection:', error);
+      // Don't re-throw, just ensure cleanup happens
     } finally {
-      this.handleDisconnection();
+      try {
+        this.handleDisconnection();
+      } catch (cleanupError) {
+        console.error('❌ Error during disconnection cleanup:', cleanupError);
+      }
     }
   }
 
@@ -581,6 +679,12 @@ export class BluetoothWaterService {
     this.characteristic = null;
     this.isConnected = false;
     this.isConnecting = false;
+
+    // Update patient connection status
+    if (this.activePatientId) {
+      this.updatePatientConnectionStatus(this.activePatientId, false);
+    }
+
     this.notifyConnectionListeners(false);
     console.log('🔌 Device disconnected');
   }
@@ -622,6 +726,115 @@ export class BluetoothWaterService {
         console.error('❌ Error in data listener:', err);
       }
     });
+
+    // Update active patient with real-time data if connected
+    if (this.activePatientId && this.isConnected) {
+      this.updateActivePatientData(data);
+    }
+  }
+
+  // Patient Management Methods
+  public setActivePatient(patientId: string): void {
+    console.log(`👤 Setting active patient: ${patientId}`);
+    this.activePatientId = patientId;
+
+    // Update patient connection status
+    if (patientId && this.isConnected) {
+      this.updatePatientConnectionStatus(patientId, true);
+    }
+  }
+
+  public getActivePatient(): string | null {
+    return this.activePatientId;
+  }
+
+  public clearActivePatient(): void {
+    if (this.activePatientId) {
+      this.updatePatientConnectionStatus(this.activePatientId, false);
+      this.activePatientId = null;
+    }
+  }
+
+  // Update active patient with real-time sensor data
+  private async updateActivePatientData(sensorData: SensorData): Promise<void> {
+    if (!this.activePatientId) return;
+
+    try {
+      // Convert sensor data to patient's bottle capacity
+      const patient = await StorageService.getPatientById(this.activePatientId);
+      if (!patient) return;
+
+      let waterLevelMl = 0;
+      
+      // Use patient's calibration if available
+      if (patient.deviceCalibration?.isCalibrated) {
+        const { emptyBaseline, fullBaseline, bottleCapacity } = patient.deviceCalibration;
+        const levelPercentage = Math.max(0, Math.min(100, 
+          ((emptyBaseline - sensorData.distance) / (emptyBaseline - fullBaseline)) * 100
+        ));
+        waterLevelMl = (levelPercentage / 100) * bottleCapacity;
+      } else {
+        // Fallback calculation
+        const levelPercentage = Math.max(0, Math.min(100, sensorData.waterLevel));
+        waterLevelMl = (levelPercentage / 100) * 500; // Assume 500ml bottle
+      }
+
+      // Update patient's current water level in storage
+      await StorageService.updatePatientWaterLevel(this.activePatientId, waterLevelMl, sensorData);
+      
+      console.log(`💧 Updated patient ${this.activePatientId} water level: ${Math.round(waterLevelMl)}ml`);
+    } catch (error) {
+      console.error('❌ Error updating patient data:', error);
+    }
+  }
+
+  // Update patient device connection status
+  private async updatePatientConnectionStatus(patientId: string, isConnected: boolean): Promise<void> {
+    try {
+      await StorageService.updatePatientDeviceStatus(patientId, isConnected);
+      console.log(`📡 Updated patient ${patientId} connection status: ${isConnected}`);
+    } catch (error) {
+      console.error('❌ Error updating patient connection status:', error);
+    }
+  }
+
+  // Load patient's calibration when connecting
+  public async loadPatientCalibration(patientId: string): Promise<void> {
+    try {
+      const calibration = await StorageService.getPatientCalibration(patientId);
+      if (calibration?.isCalibrated) {
+        console.log(`📏 Loaded calibration for patient ${patientId}:`, calibration);
+        
+        // Update local calibration service with patient's data
+        await calibrationService.saveCalibration(calibration);
+      }
+    } catch (error) {
+      console.error('❌ Error loading patient calibration:', error);
+    }
+  }
+
+  // Save calibration for active patient
+  public async savePatientCalibration(): Promise<boolean> {
+    if (!this.activePatientId) {
+      console.error('❌ No active patient to save calibration for');
+      return false;
+    }
+
+    try {
+      const calibrationData = calibrationService.getCalibrationData();
+      if (!calibrationData?.isCalibrated) {
+        console.error('❌ No valid calibration data to save');
+        return false;
+      }
+
+      // Save to patient's profile using the existing calibration data structure
+      await StorageService.savePatientCalibration(this.activePatientId, calibrationData);
+      console.log(`✅ Saved calibration for patient ${this.activePatientId}`);
+      return true;
+    } catch (error) {
+      console.error('❌ Error saving patient calibration:', error);
+      return false;
+    }
   }
   private notifyConnectionListeners(connected: boolean) {
     this.connectionListeners.forEach((listener) => {
@@ -698,13 +911,49 @@ export class BluetoothWaterService {
   // Cleanup
   public destroy() {
     console.log('🧹 Destroying Bluetooth service...');
-    this.disconnect();
-    this.stopScanning();
-    this.manager.destroy();
-    this.dataListeners = [];
-    this.connectionListeners = [];
-    this.deviceListeners = [];
-    this.scannedDevices.clear();
+    
+    // Disconnect and stop scanning with error handling
+    try {
+      this.disconnect().catch(error => {
+        console.error('❌ Error during disconnect in destroy:', error);
+      });
+    } catch (error) {
+      console.error('❌ Error calling disconnect in destroy:', error);
+    }
+    
+    try {
+      this.stopScanning();
+    } catch (error) {
+      console.error('❌ Error stopping scan in destroy:', error);
+    }
+    
+    // Destroy manager with error handling
+    try {
+      if (this.manager) {
+        this.manager.destroy();
+      }
+    } catch (error) {
+      console.error('❌ Error destroying manager:', error);
+    }
+    
+    // Clear all data
+    try {
+      this.dataListeners = [];
+      this.connectionListeners = [];
+      this.deviceListeners = [];
+      this.scannedDevices.clear();
+      
+      // Reset state
+      this.device = null;
+      this.characteristic = null;
+      this.isConnected = false;
+      this.isConnecting = false;
+      this.isScanning = false;
+    } catch (error) {
+      console.error('❌ Error clearing data in destroy:', error);
+    }
+    
+    console.log('✅ Bluetooth service destroyed');
   }
 }
 
