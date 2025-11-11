@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
+import { router } from 'expo-router';
 import { 
   User, 
   Settings, 
@@ -19,14 +20,17 @@ import {
   Target, 
   Download, 
   Palette,
-  ChevronRight 
+  ChevronRight,
+  LogOut
 } from 'lucide-react-native';
 
 import { useWaterTracking } from '../../hooks/useWaterTracking';
+import { useAuth } from '../../providers/auth-provider';
 import { Colors, Typography, BorderRadius, Shadow, Spacing } from '../../constants/theme';
 
 export default function ProfileScreen() {
   const { userProfile, updateUserProfile, currentTotal, streakCount } = useWaterTracking();
+  const { logout } = useAuth();
   const [isEditing, setIsEditing] = useState(false);
   const [tempName, setTempName] = useState(userProfile?.name || '');
   const [tempGoal, setTempGoal] = useState(userProfile?.dailyGoal?.toString() || '3000');
@@ -81,6 +85,28 @@ export default function ProfileScreen() {
     );
   };
 
+  const handleLogout = () => {
+    Alert.alert(
+      'Logout',
+      'Are you sure you want to logout?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Logout', 
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await logout();
+              router.replace('/auth');
+            } catch (error) {
+              Alert.alert('Error', 'Failed to logout. Please try again.');
+            }
+          }
+        },
+      ]
+    );
+  };
+
   const getInitials = (name: string) => {
     return name
       .split(' ')
@@ -103,7 +129,7 @@ export default function ProfileScreen() {
       <StatusBar style="dark" />
       
       <LinearGradient
-        colors={Colors.background.gradient}
+        colors={['#E3F2FD', '#FFFFFF']}
         style={styles.gradient}
       >
         <ScrollView
@@ -255,6 +281,15 @@ export default function ProfileScreen() {
                 <Text style={styles.settingLabel}>Export Data</Text>
               </View>
               <ChevronRight size={20} color={Colors.text.medium} strokeWidth={2} />
+            </TouchableOpacity>
+
+            {/* Logout */}
+            <TouchableOpacity style={[styles.settingItem, styles.logoutItem]} onPress={handleLogout}>
+              <View style={styles.settingLeft}>
+                <LogOut size={20} color={Colors.error} strokeWidth={2} />
+                <Text style={[styles.settingLabel, styles.logoutLabel]}>Logout</Text>
+              </View>
+              <ChevronRight size={20} color={Colors.error} strokeWidth={2} />
             </TouchableOpacity>
           </View>
 
@@ -489,6 +524,16 @@ const styles = StyleSheet.create({
   },
   activeUnitButtonText: {
     color: Colors.background.white,
+  },
+  logoutItem: {
+    borderBottomWidth: 0,
+    marginTop: Spacing.md,
+    paddingTop: Spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: Colors.background.light,
+  },
+  logoutLabel: {
+    color: Colors.error,
   },
   bottomSpacing: {
     height: Spacing.xxl,

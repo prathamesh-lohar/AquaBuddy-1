@@ -210,6 +210,29 @@ export default function AuthScreen() {
                     </Text>
                   </Text>
                 </TouchableOpacity>
+
+                {/* Caretaker Login Option */}
+                <View style={styles.caretakerSection}>
+                  <View style={styles.divider}>
+                    <View style={styles.dividerLine} />
+                    <Text style={styles.dividerText}>OR</Text>
+                    <View style={styles.dividerLine} />
+                  </View>
+                  
+                  <TouchableOpacity
+                    style={styles.caretakerButton}
+                    onPress={() => router.replace('/caretaker/login')}
+                    disabled={loading}
+                  >
+                    <View style={styles.caretakerButtonContent}>
+                      <Text style={styles.caretakerIcon}>👩‍⚕️</Text>
+                      <View>
+                        <Text style={styles.caretakerButtonTitle}>Healthcare Professional</Text>
+                        <Text style={styles.caretakerButtonSubtitle}>Manage multiple patients</Text>
+                      </View>
+                    </View>
+                  </TouchableOpacity>
+                </View>
               </View>
             </Animated.View>
           </View>
@@ -378,5 +401,49 @@ const styles = StyleSheet.create({
     color: "#0ea5e9",
     fontSize: 16,
     fontWeight: "600" as const,
+  },
+  caretakerSection: {
+    marginTop: 30,
+  },
+  divider: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 20,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#e2e8f0',
+  },
+  dividerText: {
+    marginHorizontal: 16,
+    color: '#64748b',
+    fontSize: 14,
+    fontWeight: '500' as const,
+  },
+  caretakerButton: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 16,
+    padding: 20,
+    borderWidth: 2,
+    borderColor: '#10b981',
+  },
+  caretakerButtonContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  caretakerIcon: {
+    fontSize: 24,
+    marginRight: 16,
+  },
+  caretakerButtonTitle: {
+    fontSize: 16,
+    fontWeight: '600' as const,
+    color: '#1e293b',
+    marginBottom: 2,
+  },
+  caretakerButtonSubtitle: {
+    fontSize: 14,
+    color: '#64748b',
   },
 });

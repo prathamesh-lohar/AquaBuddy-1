@@ -5,6 +5,7 @@ import React, { useEffect } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { AuthProvider } from "@/providers/auth-provider";
 import { HydrationProvider } from "@/providers/hydration-proider";
+import { CaretakerAuthProvider } from "@/providers/caretaker-auth-provider";
 import 'react-native-get-random-values';
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
@@ -38,6 +39,12 @@ function RootLayoutNav() {
           gestureEnabled: false,
         }}
       />
+      <Stack.Screen 
+        name="caretaker" 
+        options={{
+          gestureEnabled: false,
+        }}
+      />
     </Stack>
   );
 }
@@ -65,7 +72,9 @@ export default function RootLayout() {
       <GestureHandlerRootView style={{ flex: 1 }}>
         <AuthProvider>
           <HydrationProvider>
-            <RootLayoutNav />
+            <CaretakerAuthProvider>
+              <RootLayoutNav />
+            </CaretakerAuthProvider>
           </HydrationProvider>
         </AuthProvider>
       </GestureHandlerRootView>
