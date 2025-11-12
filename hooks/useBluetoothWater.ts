@@ -62,91 +62,102 @@ export const useBluetoothWater = () => {
 
     initializeService();
 
-    // Cleanup on unmount
+    // Cleanup on unmount - Don't destroy the service, just clean up listeners
     return () => {
       if (bluetoothService.current) {
-        bluetoothService.current.destroy();
+        try {
+          // Only stop scanning, don't destroy the whole service
+          if (isScanning) {
+            bluetoothService.current.stopScanning();
+          }
+          // The service should persist across components for device continuity
+          console.log('🔄 Cleaning up Bluetooth hook listeners (keeping service alive)');
+        } catch (error) {
+          console.error('⚠️ Error during hook cleanup:', error);
+        }
       }
     };
   }, [user?.bottleCapacity]);
 
   const scanForDevices = async () => {
-    if (!bluetoothService.current) {
-      console.error('❌ Bluetooth service not initialized, reinitializing...');
-      // Try to reinitialize
-      try {
-        bluetoothService.current = new BluetoothWaterService();
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      } catch (error) {
-        console.error('❌ Failed to reinitialize Bluetooth service:', error);
+    try {
+      // Ensure service is ready
+      const serviceReady = await ensureServiceReady();
+      if (!serviceReady) {
+        setConnectionError('Bluetooth service initialization failed');
         return [];
       }
-    }
-    
-    if (isScanning) return [];
 
-    setIsScanning(true);
-    setConnectionError(null);
+      if (isScanning) {
+        console.log('⚠️ Scan already in progress, skipping...');
+        return [];
+      }
 
-    try {
-      console.log('Scanning for Bluetooth devices...');
-      const devices = await bluetoothService.current.scanForDevices();
+      setIsScanning(true);
+      setConnectionError(null);
+
+      console.log('🔍 Starting device scan...');
+      const devices = await bluetoothService.current!.scanForDevices();
       setAvailableDevices(devices);
+      console.log(`✅ Scan completed. Found ${devices.length} devices`);
       return devices;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown scan error';
-      setConnectionError(`Scan failed: ${errorMessage}`);
-      console.error('Scan error:', error);
+      console.error('❌ Error scanning for devices:', error);
+      setConnectionError(`Scan failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
       return [];
     } finally {
       setIsScanning(false);
     }
   };
 
-  const connectToDevice = async (deviceId?: string) => {
-    if (!bluetoothService.current || isConnecting) return false;
-
-    // If no deviceId provided, try to connect to selected device
-    const targetDeviceId = deviceId || selectedDevice?.id;
-    if (!targetDeviceId) {
-      setConnectionError('No device selected');
-      return false;
-    }
-
-    setIsConnecting(true);
-    setConnectionError(null);
-
+    const connectToDevice = async (deviceId?: string) => {
     try {
-      console.log('Attempting to connect to device:', targetDeviceId);
-      const connected = await bluetoothService.current.connectToDevice(targetDeviceId);
-      
-      if (!connected) {
-        setConnectionError('Failed to connect to selected device');
-        console.log('Connection failed');
-      } else {
-        console.log('Successfully connected to device');
-        // Update selected device info if connected by ID
-        if (deviceId) {
-          const device = availableDevices.find(d => d.id === deviceId);
-          if (device) setSelectedDevice(device);
-        }
+      // Ensure service is ready
+      const serviceReady = await ensureServiceReady();
+      if (!serviceReady) {
+        setConnectionError('Bluetooth service initialization failed');
+        return false;
       }
       
-      return connected;
+      if (isConnecting) {
+        console.log('⚠️ Connection already in progress, skipping...');
+        return false;
+      }
+
+      // If no deviceId provided, try to connect to selected device
+      const targetDeviceId = deviceId || selectedDevice?.id;
+      if (!targetDeviceId) {
+        console.error('❌ No device selected for connection');
+        setConnectionError('No device selected');
+        return false;
+      }
+
+      setIsConnecting(true);
+      setConnectionError(null);
+
+      console.log('🔗 Attempting to connect to device:', targetDeviceId);
+      const success = await bluetoothService.current!.connectToDevice(targetDeviceId);
+      
+      if (success) {
+        console.log('✅ Device connected successfully');
+        setIsConnected(true);
+        
+        // Start listening to sensor data
+        bluetoothService.current!.addDataListener((data: SensorData) => {
+          setSensorData(data);
+          setLastUpdateTime(Date.now());
+        });
+      } else {
+        console.error('❌ Device connection failed');
+        setConnectionError('Failed to connect to device');
+        setIsConnected(false);
+      }
+      
+      return success;
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown connection error';
-      setConnectionError(`Connection failed: ${errorMessage}`);
-      console.error('Connection error:', error);
-      
-      // Show user-friendly error
-      if (errorMessage.includes('not available') || errorMessage.includes('not initialized')) {
-        setConnectionError('Bluetooth not available. Please restart the app.');
-      } else if (errorMessage.includes('permission')) {
-        setConnectionError('Bluetooth permissions required. Please enable in settings.');
-      } else {
-        setConnectionError('Connection failed. Please try again.');
-      }
-      
+      console.error('❌ Error during device connection:', error);
+      setConnectionError(`Connection failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      setIsConnected(false);
       return false;
     } finally {
       setIsConnecting(false);
@@ -154,9 +165,16 @@ export const useBluetoothWater = () => {
   };
 
   const stopScanning = () => {
-    if (bluetoothService.current) {
-      bluetoothService.current.stopScanning();
-      setIsScanning(false);
+    try {
+      if (bluetoothService.current && isScanning) {
+        console.log('⏹️ Stopping device scan...');
+        bluetoothService.current.stopScanning();
+        setIsScanning(false);
+        console.log('✅ Device scan stopped');
+      }
+    } catch (error) {
+      console.error('❌ Error stopping scan:', error);
+      setIsScanning(false); // Force update state even if service call fails
     }
   };
 
@@ -166,13 +184,26 @@ export const useBluetoothWater = () => {
   };
 
   const disconnectDevice = async () => {
-    if (!bluetoothService.current) return;
-
     try {
+      if (!bluetoothService.current) {
+        console.log('⚠️ No Bluetooth service to disconnect from');
+        return;
+      }
+
+      console.log('🔌 Disconnecting from device...');
       await bluetoothService.current.disconnect();
+      setIsConnected(false);
+      setSensorData(null);
+      setSelectedDevice(null);
       setConnectionError(null);
+      console.log('✅ Device disconnected successfully');
     } catch (error) {
-      console.error('Disconnect error:', error);
+      console.error('❌ Error during disconnect:', error);
+      setConnectionError(`Disconnect failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      // Still update state to reflect disconnection attempt
+      setIsConnected(false);
+      setSensorData(null);
+      setSelectedDevice(null);
     }
   };
 
@@ -203,19 +234,34 @@ export const useBluetoothWater = () => {
 
   const forceReinitialize = async (): Promise<boolean> => {
     try {
+      console.log('🔄 Force reinitializing Bluetooth service...');
       setConnectionError(null);
+      setIsConnected(false);
+      setIsConnecting(false);
+      setIsScanning(false);
+      setSelectedDevice(null);
+      setSensorData(null);
       
       if (bluetoothService.current) {
+        try {
+          // Only disconnect, don't destroy
+          await bluetoothService.current.disconnect();
+        } catch (disconnectError) {
+          console.log('⚠️ Disconnect error during reinit (continuing):', disconnectError);
+        }
+        
         return await bluetoothService.current.reinitialize();
       }
       
       // Create new service if none exists
+      console.log('🆕 Creating new Bluetooth service instance...');
       bluetoothService.current = new BluetoothWaterService();
       await new Promise(resolve => setTimeout(resolve, 1000));
+      console.log('✅ Bluetooth service reinitialized successfully');
       return true;
     } catch (error) {
       console.error('❌ Failed to reinitialize:', error);
-      setConnectionError('Failed to reinitialize Bluetooth');
+      setConnectionError(`Reinit failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
       return false;
     }
   };
@@ -291,6 +337,15 @@ export const useBluetoothWater = () => {
     }
   };
 
+  // Production safety check
+  const ensureServiceReady = async (): Promise<boolean> => {
+    if (!bluetoothService.current) {
+      console.log('🔧 Bluetooth service not ready, initializing...');
+      return await forceReinitialize();
+    }
+    return true;
+  };
+
   return {
     // Connection state
     isConnected,
@@ -318,6 +373,7 @@ export const useBluetoothWater = () => {
     disconnectDevice,
     getDiagnostics,
     forceReinitialize,
+    ensureServiceReady,
     
     // Sleep mode functions
     enterDeepSleep,

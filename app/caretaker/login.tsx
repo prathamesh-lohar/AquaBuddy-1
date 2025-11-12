@@ -31,10 +31,11 @@ export default function CaretakerLoginScreen() {
 
     setIsLoading(true);
     try {
-      await signInAsCaretaker(email.trim(), password);
+      await signInAsCaretaker(email.trim(), password.trim());
       router.replace('/caretaker/dashboard');
     } catch (error: any) {
-      Alert.alert('Login Failed', error.message || 'Please check your credentials and try again');
+      console.error('Login error:', error);
+      Alert.alert('Login Failed', error.message || 'Something went wrong. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -64,14 +65,14 @@ export default function CaretakerLoginScreen() {
             <Text style={styles.title}>AquaBuddy</Text>
             <Text style={styles.subtitle}>Caretaker Portal</Text>
             <Text style={styles.description}>
-              Monitor and manage hydration for your patients
+              Monitor and manage hydration for your patients with real-time IoT device data
             </Text>
           </View>
 
           {/* Login Form */}
           <View style={styles.formContainer}>
             <View style={styles.form}>
-              <Text style={styles.formTitle}>Sign In as Caretaker</Text>
+              <Text style={styles.formTitle}>Quick Access - Caretaker</Text>
               
               <View style={styles.inputContainer}>
                 <Text style={styles.inputLabel}>Email Address</Text>
@@ -92,7 +93,7 @@ export default function CaretakerLoginScreen() {
                 <Text style={styles.inputLabel}>Password</Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="healthcare123"
+                  placeholder="Enter your password"
                   placeholderTextColor="rgba(255, 255, 255, 0.7)"
                   value={password}
                   onChangeText={setPassword}
@@ -105,9 +106,9 @@ export default function CaretakerLoginScreen() {
 
               {/* Development Credentials Helper */}
               <View style={styles.credentialsHelper}>
-                <Text style={styles.helperTitle}>Development Login:</Text>
+                <Text style={styles.helperTitle}>Quick Login:</Text>
                 <Text style={styles.helperText}>Email: doctor@healthcare.com</Text>
-                <Text style={styles.helperText}>Password: healthcare123</Text>
+                <Text style={styles.helperText}>Password: password123</Text>
               </View>
 
               <TouchableOpacity 

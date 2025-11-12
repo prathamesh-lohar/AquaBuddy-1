@@ -813,6 +813,37 @@ export class BluetoothWaterService {
     }
   }
 
+  // Connect device to a specific patient
+  public async connectToPatientDevice(deviceId: string, patientId: string): Promise<boolean> {
+    try {
+      console.log(`🔗 Connecting device ${deviceId} to patient ${patientId}`);
+      
+      // Set the active patient first
+      this.setActivePatient(patientId);
+      
+      // Load patient's calibration
+      await this.loadPatientCalibration(patientId);
+      
+      // Connect to the device
+      const success = await this.connectToDevice(deviceId);
+      
+      if (success) {
+        // Update patient connection status
+        await this.updatePatientConnectionStatus(patientId, true);
+        console.log(`✅ Successfully connected patient ${patientId} to device ${deviceId}`);
+      } else {
+        // Clear active patient if connection failed
+        this.clearActivePatient();
+        console.error(`❌ Failed to connect patient ${patientId} to device ${deviceId}`);
+      }
+      
+      return success;
+    } catch (error) {
+      console.error(`❌ Error connecting patient device:`, error);
+      return false;
+    }
+  }
+
   // Save calibration for active patient
   public async savePatientCalibration(): Promise<boolean> {
     if (!this.activePatientId) {
@@ -862,6 +893,14 @@ export class BluetoothWaterService {
 
   public getConnectedDevice(): Device | null {
     return this.device;
+  }
+
+  public getConnectedDeviceId(): string | null {
+    return this.device?.id || null;
+  }
+
+  public getScannedDevices(): BluetoothDevice[] {
+    return Array.from(this.scannedDevices.values());
   }
 
   public async getBluetoothState(): Promise<State> {
@@ -957,5 +996,5 @@ export class BluetoothWaterService {
   }
 }
 
-// Export singleton instance
+// Export a singleton instance
 export const bluetoothWaterService = new BluetoothWaterService();

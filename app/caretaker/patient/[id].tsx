@@ -26,18 +26,18 @@ import { SimpleCalibrationModal } from '../../../components/SimpleCalibrationMod
 import { Colors, Typography, Spacing } from '../../../constants/theme';
 import { formatWaterAmount, getMotivationalTip } from '../../../utils/waterUtils';
 import { calibrationService } from '../../../services/CalibrationService';
-import { PatientUser } from '../../../types/caretaker';
+import { Patient, DeviceCalibration } from '../../../types';
 
 export default function PatientDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { managedUsers, caretaker, refreshData } = useCaretakerAuth();
+  const { patients, caretaker, refreshData } = useCaretakerAuth();
   const [refreshing, setRefreshing] = useState(false);
   const [currentTip] = useState(getMotivationalTip());
   const [showCalibrationModal, setShowCalibrationModal] = useState(false);
   const [isCalibrated, setIsCalibrated] = useState(false);
 
   // Find the patient data
-  const patient = managedUsers.find(p => p.id === id);
+  const patient = patients.find(p => p.id === id);
 
   // Bluetooth IoT Integration
   const {
@@ -59,29 +59,65 @@ export default function PatientDetailScreen() {
     disconnectDevice,
   } = useBluetoothWater();
 
+  // Set active patient for this device when component mounts
+  useEffect(() => {
+    if (patient?.id && isConnected) {
+      // Import the service directly for patient management
+      import('../../../services/BluetoothWaterService').then(({ bluetoothWaterService }) => {
+        bluetoothWaterService.setActivePatient(patient.id);
+      });
+    }
+  }, [patient?.id, isConnected]);
+
   // Use real IoT data if connected, otherwise mock data
   const currentWaterLevel = (() => {
-    if (isConnected && sensorData) {
-      const MIN_VALID_DISTANCE = 40; // mm - anything closer is likely not a bottle
-      
-      if (sensorData.distance < MIN_VALID_DISTANCE) {
-        console.log(`⚠️ Distance too close (${sensorData.distance}mm) - likely no bottle detected`);
-        return 0; // No bottle detected
+    try {
+      if (isConnected && sensorData && isDataFresh) {
+        console.log('📊 Using real-time sensor data:', sensorData);
+        const MIN_VALID_DISTANCE = 40; // mm - anything closer is likely not a bottle
+        
+        if (sensorData.distance < MIN_VALID_DISTANCE) {
+          console.log(`⚠️ Distance too close (${sensorData.distance}mm) - likely no bottle detected`);
+          return 0; // No bottle detected
+        }
+        
+        if (calibrationService.isDeviceCalibrated() && patient?.deviceCalibration?.isCalibrated) {
+          // Use patient's calibration data
+          const { emptyBaseline, fullBaseline } = patient.deviceCalibration;
+          const calculatedLevel = Math.max(0, Math.min(100, 
+            ((emptyBaseline - sensorData.distance) / (emptyBaseline - fullBaseline)) * 100
+          ));
+          console.log(`📏 Calibrated level: ${calculatedLevel}% (distance: ${sensorData.distance}mm)`);
+          return calculatedLevel / 100; // Return as 0-1 range
+        } else {
+          // Use sensor's calculated water level if not calibrated
+          const sensorLevel = sensorData.waterLevel || 0;
+          console.log(`📊 Sensor level: ${sensorLevel}%`);
+          return Math.min(Math.max(sensorLevel / 100, 0), 1);
+        }
       }
       
-      if (calibrationService.isDeviceCalibrated()) {
-        return calibrationService.calculateWaterLevel(sensorData) / 100; // Convert to 0-1 range
-      } else {
-        return Math.min(Math.max(sensorData.waterLevel / 100, 0), 1);
+      // Use patient's stored water level if available
+      if (patient?.currentWaterLevel !== undefined && patient.currentWaterLevel >= 0) {
+        return Math.min(Math.max(patient.currentWaterLevel / 100, 0), 1);
       }
+      
+      // Fallback to sensible mock data
+      return 0.65;
+    } catch (error) {
+      console.error('Error calculating water level:', error);
+      return 0.65; // Safe fallback
     }
-    return 0.65; // Fallback mock data
   })();
 
   // Mock real-time data (enhanced with IoT integration)
-  const [mockData, setMockData] = useState({
-    dailyConsumed: 1400, // ml consumed today
-    lastDrinkTime: new Date(Date.now() - 45 * 60000), // 45 minutes ago
+  const [mockData, setMockData] = useState(() => {
+    // Calculate initial values based on patient data and current water level
+    const baseConsumption = patient?.dailyGoal ? Math.floor(patient.dailyGoal * 0.7) : 1400;
+    return {
+      dailyConsumed: patient?.todayIntakes?.reduce((sum, intake) => sum + intake.amount, 0) || baseConsumption,
+      lastDrinkTime: new Date(Date.now() - 45 * 60000), // 45 minutes ago
+    };
   });
 
   // Initialize calibration service
@@ -107,6 +143,29 @@ export default function PatientDetailScreen() {
     }
   }, [isConnected, isCalibrated]);
 
+  // Real-time data refresh effect
+  useEffect(() => {
+    let refreshInterval: any;
+    
+    if (isConnected && sensorData) {
+      // Refresh the display every 2 seconds when connected
+      refreshInterval = setInterval(() => {
+        // Force re-render to update timestamps and fresh data indicators
+        setMockData(prev => ({
+          ...prev,
+          lastDrinkTime: sensorData.waterLevel !== undefined && sensorData.waterLevel > 0 ? 
+            new Date(sensorData.timestamp) : prev.lastDrinkTime,
+        }));
+      }, 2000);
+    }
+    
+    return () => {
+      if (refreshInterval) {
+        clearInterval(refreshInterval);
+      }
+    };
+  }, [isConnected, sensorData]);
+
   useEffect(() => {
     if (!patient) {
       Alert.alert(
@@ -120,31 +179,54 @@ export default function PatientDetailScreen() {
   const onRefresh = async () => {
     setRefreshing(true);
     
-    // Simulate fetching fresh IoT data
-    setMockData(prev => ({
-      ...prev,
-      dailyConsumed: Math.floor(Math.random() * 1000 + 800), // 800-1800ml
-      lastDrinkTime: new Date(Date.now() - Math.random() * 2 * 60 * 60000), // 0-2 hours ago
-    }));
-    
-    setTimeout(() => setRefreshing(false), 1000);
+    try {
+      // Refresh caretaker data
+      await refreshData();
+      
+      // Simulate fetching fresh IoT data with more realistic values
+      const baseGoal = patient?.dailyGoal || 2000;
+      const newConsumed = Math.floor(Math.random() * baseGoal * 0.4 + baseGoal * 0.4); // 40-80% of goal
+      
+      setMockData(prev => ({
+        ...prev,
+        dailyConsumed: newConsumed,
+        lastDrinkTime: new Date(Date.now() - Math.random() * 2 * 60 * 60000), // 0-2 hours ago
+      }));
+    } catch (error) {
+      console.error('Error refreshing data:', error);
+    } finally {
+      setTimeout(() => setRefreshing(false), 1000);
+    }
   };
 
   // Handle calibration completion
-  const handleCalibrationComplete = async () => {
+  const handleCalibrationComplete = async (calibration: DeviceCalibration) => {
     try {
       setIsCalibrated(true);
       setShowCalibrationModal(false);
+      
+      // Save calibration to patient's profile if we have an active patient
+      if (patient?.id) {
+        // Import the service and save patient-specific calibration
+        const { bluetoothWaterService } = await import('../../../services/BluetoothWaterService');
+        await bluetoothWaterService.savePatientCalibration();
+        
+        // Update patient in caretaker context with calibration data
+        if (refreshData) {
+          await refreshData();
+        }
+      }
+      
       Alert.alert(
         'Calibration Complete!',
-        'The IoT device has been successfully calibrated for accurate patient monitoring.',
+        'The IoT device has been successfully calibrated for accurate patient monitoring. The calibration is saved to this patient\'s profile.',
         [{ text: 'OK' }]
       );
     } catch (error) {
       console.error('Error completing calibration:', error);
       Alert.alert(
         'Calibration Error',
-        'There was an issue completing the calibration. Please try again.',
+        'There was an issue saving the calibration. Please try again.',
         [{ text: 'OK' }]
       );
     }
@@ -160,9 +242,11 @@ export default function PatientDetailScreen() {
     );
   }
 
-  const currentWaterAmount = Math.round(currentWaterLevel * patient.hydrationGoal);
-  const progressPercentage = Math.min((mockData.dailyConsumed / patient.hydrationGoal) * 100, 100);
-  const remainingGoal = Math.max(0, patient.hydrationGoal - mockData.dailyConsumed);
+  // Calculate bottle capacity (assume 1000ml bottle capacity)
+  const bottleCapacity = patient?.deviceCalibration?.bottleCapacity || 1000;
+  const currentWaterAmount = Math.round(currentWaterLevel * bottleCapacity);
+  const progressPercentage = Math.min((mockData.dailyConsumed / (patient?.dailyGoal || 2000)) * 100, 100);
+  const remainingGoal = Math.max(0, (patient?.dailyGoal || 2000) - mockData.dailyConsumed);
 
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -215,7 +299,7 @@ export default function PatientDetailScreen() {
           </TouchableOpacity>
           <View style={styles.headerCenter}>
             <Text style={styles.headerTitle}>Patient Monitor</Text>
-            <Text style={styles.headerSubtitle}>{caretaker?.facilityName}</Text>
+            <Text style={styles.headerSubtitle}>Patient Dashboard</Text>
           </View>
           <View style={styles.headerRight} />
         </View>
@@ -235,7 +319,7 @@ export default function PatientDetailScreen() {
           {/* Patient Info Header */}
           <View style={styles.patientInfoHeader}>
             <Text style={styles.greeting}>
-              {getGreeting()}, monitoring {patient.name} 👋
+              {getGreeting()}, monitoring {patient?.name || 'Unknown Patient'} 👋
             </Text>
             <Text style={styles.date}>{formatDate()}</Text>
             
@@ -246,8 +330,14 @@ export default function PatientDetailScreen() {
                 { backgroundColor: isConnected ? '#4CAF50' : '#F44336' }
               ]} />
               <Text style={styles.connectionText}>
-                IoT Device {isConnected ? 'Connected' : 'Disconnected'}
+                IoT Device {isConnected ? 'Connected' : 'Disconnected'} 
+                {isDataFresh && isConnected ? ' • Live Data' : isConnected ? ' • No Data' : ''}
               </Text>
+              {connectionError && (
+                <Text style={[styles.connectionText, { color: '#F44336', fontSize: 11 }]}>
+                  {connectionError}
+                </Text>
+              )}
             </View>
           </View>
 
@@ -257,49 +347,48 @@ export default function PatientDetailScreen() {
             <View style={styles.detailsGrid}>
               <View style={styles.detailItem}>
                 <Text style={styles.detailLabel}>Name</Text>
-                <Text style={styles.detailValue}>{patient.name}</Text>
+                <Text style={styles.detailValue}>{patient?.name || 'Unknown'}</Text>
               </View>
               <View style={styles.detailItem}>
                 <Text style={styles.detailLabel}>Age</Text>
-                <Text style={styles.detailValue}>{patient.age} years</Text>
+                <Text style={styles.detailValue}>{patient?.age ? `${patient.age} years` : 'Not specified'}</Text>
               </View>
               <View style={styles.detailItem}>
-                <Text style={styles.detailLabel}>Gender</Text>
-                <Text style={styles.detailValue}>{patient.gender}</Text>
+                <Text style={styles.detailLabel}>Weight</Text>
+                <Text style={styles.detailValue}>{patient?.weight ? `${patient.weight} kg` : 'Not specified'}</Text>
               </View>
               <View style={styles.detailItem}>
-                <Text style={styles.detailLabel}>Room</Text>
-                <Text style={styles.detailValue}>{patient.roomNumber || 'N/A'}</Text>
+                <Text style={styles.detailLabel}>Daily Goal</Text>
+                <Text style={styles.detailValue}>{patient?.dailyGoal || 2000}ml</Text>
               </View>
             </View>
             
-            {patient.medicalConditions.length > 0 && (
+            {patient.notes && (
               <View style={styles.medicalConditions}>
-                <Text style={styles.detailLabel}>Medical Conditions</Text>
+                <Text style={styles.detailLabel}>Notes</Text>
                 <View style={styles.conditionsWrapper}>
-                  {patient.medicalConditions.map((condition, index) => (
-                    <View key={index} style={styles.conditionTag}>
-                      <Text style={styles.conditionText}>{condition}</Text>
-                    </View>
-                  ))}
+                  <Text style={styles.conditionText}>{patient.notes}</Text>
                 </View>
               </View>
             )}
 
             {/* Emergency Contact */}
-            <View style={styles.emergencyContact}>
+            {/* <View style={styles.emergencyContact}>
               <Text style={styles.detailLabel}>Emergency Contact</Text>
               <Text style={styles.detailValue}>{patient.emergencyContact.name}</Text>
               <Text style={styles.emergencyPhone}>{patient.emergencyContact.phone}</Text>
               <Text style={styles.emergencyRelation}>{patient.emergencyContact.relationship}</Text>
-            </View>
+            </View> */}
           </View>
 
           {/* Water Bottle Visualization */}
           <View style={styles.bottleContainer}>
-            <WaterBottle progress={currentWaterLevel} capacity={patient.hydrationGoal} />
+            <WaterBottle 
+              progress={Math.min(Math.max(currentWaterLevel, 0), 1)} 
+              capacity={bottleCapacity} 
+            />
             <Text style={styles.bottleStatus}>
-              {currentWaterAmount}ml / {patient.hydrationGoal}ml
+              {currentWaterAmount}ml / {bottleCapacity}ml
             </Text>
             <Text style={styles.bottleSubtext}>
               Current Bottle Level: {Math.round(currentWaterLevel * 100)}%
@@ -313,12 +402,12 @@ export default function PatientDetailScreen() {
           <View style={styles.statsContainer}>
             <StatCard
               label="Daily Goal"
-              value={formatWaterAmount(patient.hydrationGoal, 'ml')}
+              value={formatWaterAmount(patient?.dailyGoal || 2000, 'ml')}
               color={Colors.text.medium}
             />
             <StatCard
               label="Consumed"
-              value={formatWaterAmount(mockData.dailyConsumed, 'ml')}
+              value={formatWaterAmount(mockData.dailyConsumed || 0, 'ml')}
               color={Colors.primary}
             />
             <StatCard
@@ -348,44 +437,125 @@ export default function PatientDetailScreen() {
             <View style={[styles.deviceInfo, { borderLeftColor: isConnected ? '#4CAF50' : '#F44336' }]}>
               <Text style={styles.deviceInfoText}>
                 📱 Status: {isConnected ? 'Connected' : 'Disconnected'}
+                {isConnecting ? ' (Connecting...)' : ''}
+                {isScanning ? ' (Scanning...)' : ''}
               </Text>
               <Text style={styles.deviceInfoText}>
                 💧 Water Level: {(currentWaterLevel * 100).toFixed(1)}%
+                {isConnected && sensorData ? ` (Live: ${sensorData.distance}mm)` : ''}
               </Text>
               <Text style={styles.deviceInfoText}>
-                🕐 Last Update: {mockData.lastDrinkTime.toLocaleTimeString()}
+                🕐 Last Update: {isConnected && sensorData && isDataFresh ? 
+                  new Date(sensorData.timestamp).toLocaleTimeString() : 
+                  mockData.lastDrinkTime.toLocaleTimeString()
+                }
+                {isDataFresh && isConnected ? ' 🟢' : !isConnected ? ' 🔴' : ' 🟡'}
               </Text>
               <Text style={styles.deviceInfoText}>
                 📊 Daily Progress: {Math.round(progressPercentage)}%
               </Text>
               <Text style={styles.deviceInfoText}>
-                🎯 Goal: {patient.hydrationGoal}ml
+                🎯 Goal: {patient?.dailyGoal || 2000}ml
               </Text>
               <Text style={styles.deviceInfoText}>
-                🔋 Device: {patient.deviceIds.length > 0 ? 'Active' : 'Not Assigned'}
+                🔋 Device: {isConnected ? 'Online' : 'Offline'}
+                {selectedDevice ? ` (${selectedDevice.name || selectedDevice.id})` : ''}
               </Text>
               <Text style={styles.deviceInfoText}>
                 📏 Calibrated: {isCalibrated ? 'Yes' : 'No'}
+                {patient?.deviceCalibration?.isCalibrated ? ' (Patient-specific)' : ''}
               </Text>
+              {availableDevices.length > 0 && !isConnected && (
+                <Text style={styles.deviceInfoText}>
+                  📡 Found Devices: {availableDevices.length}
+                </Text>
+              )}
             </View>
             
             {/* Device Control Buttons */}
             <View style={styles.deviceButtons}>
-              <TouchableOpacity
-                style={[
-                  styles.deviceActionButton, 
-                  { backgroundColor: isConnected ? '#f44336' : '#2196F3' }
-                ]}
-                onPress={isConnected ? disconnectDevice : () => {
-                  scanForDevices();
-                  setTimeout(() => connectToDevice(), 2000); // Auto-connect after scan
-                }}
-                disabled={isScanning}
-              >
-                <Text style={styles.deviceActionButtonText}>
-                  {isScanning ? '🔍 Scanning...' : isConnected ? '🔌 Disconnect' : '📡 Connect'}
-                </Text>
-              </TouchableOpacity>
+              {!isConnected ? (
+                <>
+                  <TouchableOpacity
+                    style={[
+                      styles.deviceActionButton, 
+                      { backgroundColor: isScanning ? '#FF9800' : '#2196F3' }
+                    ]}
+                    onPress={async () => {
+                      if (isScanning) {
+                        stopScanning();
+                      } else {
+                        await scanForDevices();
+                      }
+                    }}
+                    disabled={isConnecting}
+                  >
+                    <Text style={styles.deviceActionButtonText}>
+                      {isScanning ? '⏹️ Stop Scan' : '🔍 Scan Devices'}
+                    </Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity
+                    style={[
+                      styles.deviceActionButton, 
+                      { 
+                        backgroundColor: availableDevices.length > 0 ? '#4CAF50' : '#9E9E9E',
+                        opacity: isConnecting ? 0.5 : 1
+                      }
+                    ]}
+                    onPress={async () => {
+                      if (availableDevices.length > 0) {
+                        // Connect to first available device or selected device
+                        const deviceToConnect = selectedDevice || availableDevices[0];
+                        selectDevice(deviceToConnect);
+                        const success = await connectToDevice(deviceToConnect.id);
+                        if (success && patient) {
+                          // Import the service and set active patient
+                          const { bluetoothWaterService } = await import('../../../services/BluetoothWaterService');
+                          bluetoothWaterService.setActivePatient(patient.id);
+                          
+                          Alert.alert(
+                            'Connected!',
+                            `Connected to ${deviceToConnect.name || deviceToConnect.id}. Real-time monitoring active.`,
+                            [{ text: 'OK' }]
+                          );
+                        }
+                      } else {
+                        Alert.alert(
+                          'No Devices Found',
+                          'Please scan for devices first.',
+                          [{ text: 'OK' }]
+                        );
+                      }
+                    }}
+                    disabled={isConnecting || availableDevices.length === 0}
+                  >
+                    <Text style={styles.deviceActionButtonText}>
+                      {isConnecting ? '� Connecting...' : 
+                       availableDevices.length > 0 ? `📡 Connect (${availableDevices.length})` : '📡 No Devices'}
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              ) : (
+                <TouchableOpacity
+                  style={[
+                    styles.deviceActionButton, 
+                    { backgroundColor: '#f44336' }
+                  ]}
+                  onPress={async () => {
+                    await disconnectDevice();
+                    Alert.alert(
+                      'Disconnected',
+                      'Device disconnected. Real-time monitoring stopped.',
+                      [{ text: 'OK' }]
+                    );
+                  }}
+                >
+                  <Text style={styles.deviceActionButtonText}>
+                    � Disconnect
+                  </Text>
+                </TouchableOpacity>
+              )}
               
               <TouchableOpacity
                 style={[
@@ -435,7 +605,7 @@ export default function PatientDetailScreen() {
         visible={showCalibrationModal}
         onClose={() => setShowCalibrationModal(false)}
         onComplete={async (calibration) => {
-          await handleCalibrationComplete();
+          await handleCalibrationComplete(calibration);
         }}
         sensorData={sensorData}
       />

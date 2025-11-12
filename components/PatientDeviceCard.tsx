@@ -18,12 +18,14 @@ interface PatientDeviceCardProps {
   patient: Patient;
   onPatientPress: () => void;
   onUpdatePatient: (patientId: string, updates: Partial<Patient>) => void;
+  onDeletePatient?: () => void;
 }
 
 export const PatientDeviceCard: React.FC<PatientDeviceCardProps> = ({
   patient,
   onPatientPress,
   onUpdatePatient,
+  onDeletePatient,
 }) => {
   const [isConnecting, setIsConnecting] = useState(false);
   const [sensorData, setSensorData] = useState<any>(null);
@@ -68,55 +70,93 @@ export const PatientDeviceCard: React.FC<PatientDeviceCardProps> = ({
   }, [patient.deviceId, patient.isConnected, patient.id]);
 
   const handleConnectDevice = async () => {
-    if (!patient.deviceId) {
-      Alert.alert(
-        'No Device',
-        'No Bluetooth device assigned to this patient. Please assign a device first.',
-        [{ text: 'OK' }]
-      );
-      return;
-    }
-
     setIsConnecting(true);
     try {
-      // Find the device in available devices
-      const success = await bluetoothWaterService.connectToDevice(patient.deviceId);
+      // First, scan for available devices
+      console.log('🔍 Scanning for available devices...');
       
-      if (success) {
-        // Update patient connection status
-        if (onUpdatePatient) {
-          onUpdatePatient(patient.id, {
-            isConnected: true,
-            lastSync: new Date().toISOString(),
-          });
+      // Start scanning for devices
+      await bluetoothWaterService.scanForDevices();
+      
+      // Give some time for scanning
+      setTimeout(async () => {
+        try {
+          // Get available devices (you might want to show a device selection modal here)
+          // For now, let's try to connect to the first available device
+          const deviceConnected = await attemptDeviceConnection();
+          
+          if (deviceConnected) {
+            // Update patient with the connected device info
+            if (onUpdatePatient) {
+              onUpdatePatient(patient.id, {
+                isConnected: true,
+                lastSync: new Date().toISOString(),
+                deviceId: bluetoothWaterService.getConnectedDeviceId() ?? undefined, // Add this method to service
+              });
+            }
+            
+            Alert.alert(
+              'Connected Successfully!',
+              `${patient.name}'s device is now connected. Real-time water level monitoring is active.`,
+              [{ text: 'OK' }]
+            );
+          } else {
+            Alert.alert(
+              'No Device Found',
+              'No compatible water bottle devices found nearby. Make sure the device is powered on and in pairing mode.',
+              [{ text: 'OK' }]
+            );
+          }
+        } catch (error) {
+          console.error('Error during device connection:', error);
+          Alert.alert(
+            'Connection Error',
+            'Failed to connect to device. Please try again.',
+            [{ text: 'OK' }]
+          );
+        } finally {
+          setIsConnecting(false);
         }
-        
-        Alert.alert(
-          'Connected',
-          `Successfully connected to ${patient.name}'s device!`,
-          [{ text: 'OK' }]
-        );
-      } else {
-        Alert.alert(
-          'Connection Failed',
-          'Unable to connect to the device. Make sure it\'s nearby and powered on.',
-          [{ text: 'OK' }]
-        );
-      }
+      }, 3000); // Scan for 3 seconds
+      
     } catch (error) {
-      console.error('Error connecting to patient device:', error);
+      console.error('Error starting device scan:', error);
       Alert.alert(
-        'Connection Error',
-        'An error occurred while connecting to the device.',
+        'Scan Error',
+        'Failed to start device scanning. Please check Bluetooth permissions.',
         [{ text: 'OK' }]
       );
-    } finally {
       setIsConnecting(false);
+    }
+  };
+
+  const attemptDeviceConnection = async (): Promise<boolean> => {
+    try {
+      // Try to connect using the existing method
+      // This will automatically handle device discovery and connection
+      const availableDevices = bluetoothWaterService.getScannedDevices();
+      
+      if (availableDevices.length === 0) {
+        console.log('❌ No devices found during scan');
+        return false;
+      }
+
+      // Try to connect to the first compatible device
+      const deviceToConnect = availableDevices[0];
+      console.log(`🔗 Attempting to connect to device: ${deviceToConnect.name || deviceToConnect.id}`);
+      
+      const success = await bluetoothWaterService.connectToPatientDevice(deviceToConnect.id, patient.id);
+      return success;
+    } catch (error) {
+      console.error('❌ Error in attemptDeviceConnection:', error);
+      return false;
     }
   };
 
   const handleDisconnectDevice = async () => {
     try {
+      // Clear active patient before disconnecting
+      bluetoothWaterService.clearActivePatient();
       await bluetoothWaterService.disconnect();
       
       // Update patient connection status
@@ -128,7 +168,7 @@ export const PatientDeviceCard: React.FC<PatientDeviceCardProps> = ({
       
       Alert.alert(
         'Disconnected',
-        `Disconnected from ${patient.name}'s device.`,
+        `Disconnected from ${patient.name}'s device. Real-time monitoring stopped.`,
         [{ text: 'OK' }]
       );
     } catch (error) {
@@ -260,6 +300,14 @@ export const PatientDeviceCard: React.FC<PatientDeviceCardProps> = ({
               >
                 <Text style={styles.detailsButtonText}>View Details</Text>
               </TouchableOpacity>
+              {onDeletePatient && (
+                <TouchableOpacity
+                  style={[styles.actionButton, styles.deleteButton]}
+                  onPress={onDeletePatient}
+                >
+                  <Text style={styles.deleteButtonText}>Delete</Text>
+                </TouchableOpacity>
+              )}
             </View>
           </View>
         ) : (
@@ -296,6 +344,14 @@ export const PatientDeviceCard: React.FC<PatientDeviceCardProps> = ({
               >
                 <Text style={styles.detailsButtonText}>View Details</Text>
               </TouchableOpacity>
+              {onDeletePatient && (
+                <TouchableOpacity
+                  style={[styles.actionButton, styles.deleteButton]}
+                  onPress={onDeletePatient}
+                >
+                  <Text style={styles.deleteButtonText}>Delete</Text>
+                </TouchableOpacity>
+              )}
             </View>
           </View>
         )}
@@ -504,6 +560,16 @@ const styles = StyleSheet.create({
   },
   detailsButtonText: {
     color: Colors.primary,
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  deleteButton: {
+    backgroundColor: '#F44336',
+    borderWidth: 1,
+    borderColor: '#F44336',
+  },
+  deleteButtonText: {
+    color: 'white',
     fontSize: 14,
     fontWeight: '600',
   },

@@ -20,10 +20,14 @@ export const WaterBottle: React.FC<WaterBottleProps> = ({
   const waterLevelAnim = useRef(new Animated.Value(0)).current;
   const waveAnim = useRef(new Animated.Value(0)).current;
 
+  // Ensure progress is within valid range
+  const validProgress = Math.min(Math.max(Number(progress) || 0, 0), 1);
+  const validCapacity = Math.max(Number(capacity) || 1000, 100); // Minimum 100ml
+
   useEffect(() => {
     // Animate water level
     Animated.timing(waterLevelAnim, {
-      toValue: progress,
+      toValue: validProgress,
       duration: 1000,
       useNativeDriver: false,
     }).start();
@@ -49,7 +53,7 @@ export const WaterBottle: React.FC<WaterBottleProps> = ({
     return () => {
       waveAnimation.stop();
     };
-  }, [progress]);
+  }, [validProgress]);
 
   const bottleHeight = size * 1.4;
   const bottleWidth = size;
@@ -57,6 +61,7 @@ export const WaterBottle: React.FC<WaterBottleProps> = ({
   const waterHeight = waterLevelAnim.interpolate({
     inputRange: [0, 1],
     outputRange: ['0%', '80%'],
+    extrapolate: 'clamp',
   });
 
   const waveTranslateY = waveAnim.interpolate({
@@ -132,7 +137,7 @@ export const WaterBottle: React.FC<WaterBottleProps> = ({
         />
         
         {/* Water Surface Wave */}
-        {progress > 0.05 && (
+        {validProgress > 0.05 && (
           <Animated.View
             style={[
               styles.waterWave,
@@ -153,8 +158,8 @@ export const WaterBottle: React.FC<WaterBottleProps> = ({
 
       {/* Bottle Info */}
       <View style={styles.bottleInfo}>
-        <Text style={styles.capacityText}>{capacity}ml</Text>
-        <Text style={styles.levelText}>{Math.round(progress * 100)}%</Text>
+        <Text style={styles.capacityText}>{validCapacity}ml</Text>
+        <Text style={styles.levelText}>{Math.round(validProgress * 100)}%</Text>
       </View>
 
      

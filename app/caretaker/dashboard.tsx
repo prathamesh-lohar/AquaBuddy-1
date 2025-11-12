@@ -14,20 +14,24 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
 import { router } from 'expo-router';
 import { useCaretakerAuth } from '../../providers/caretaker-auth-provider';
-import { AddPatientModal } from '../../components/AddPatientModal';
-import { Colors, Typography, Spacing } from '../../constants/theme';
-import { PatientUser, HydrationAlert } from '../../types/caretaker';
+import { PatientDeviceCard } from '../../components/PatientDeviceCard';
+import { Colors, Spacing } from '../../constants/theme';
+import { Patient } from '../../types';
 
 export default function CaretakerDashboard() {
   const { 
     caretaker, 
-    managedUsers, 
-    alerts, 
+    patients, 
+    activePatient,
     isLoading, 
     isCaretaker,
     refreshData,
     signOut,
-    acknowledgeAlert
+    clearAllData,
+    updatePatient,
+    deletePatient,
+    setActivePatient,
+    addPatient
   } = useCaretakerAuth();
 
   const [refreshing, setRefreshing] = useState(false);
@@ -54,7 +58,7 @@ export default function CaretakerDashboard() {
   const handleSignOut = () => {
     Alert.alert(
       'Sign Out Confirmation',
-      `${caretaker?.name}, are you sure you want to sign out of the caretaker portal? All unsaved changes will be lost.`,
+      `${caretaker?.name}, are you sure you want to sign out of the caretaker portal?`,
       [
         { 
           text: 'Cancel', 
@@ -76,19 +80,34 @@ export default function CaretakerDashboard() {
     );
   };
 
-  const handleAlertPress = async (alert: HydrationAlert) => {
+  const handlePatientPress = (patient: Patient) => {
+    // Navigate to patient details
+    router.push(`/caretaker/patient/${patient.id}`);
+  };
+
+  const handleUpdatePatient = async (patientId: string, updates: Partial<Patient>) => {
+    try {
+      await updatePatient(patientId, updates);
+    } catch (error) {
+      console.error('Error updating patient:', error);
+    }
+  };
+
+  const handleDeletePatient = (patient: Patient) => {
     Alert.alert(
-      'Alert Details',
-      alert.message,
+      'Delete Patient',
+      `Are you sure you want to delete ${patient.name}? This action cannot be undone.`,
       [
-        { text: 'Dismiss', style: 'cancel' },
+        { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Acknowledge',
+          text: 'Delete',
+          style: 'destructive',
           onPress: async () => {
             try {
-              await acknowledgeAlert(alert.id);
+              await deletePatient(patient.id);
+              Alert.alert('Success', `${patient.name} has been deleted.`);
             } catch (error) {
-              Alert.alert('Error', 'Failed to acknowledge alert');
+              Alert.alert('Error', 'Failed to delete patient.');
             }
           }
         }
@@ -97,19 +116,51 @@ export default function CaretakerDashboard() {
   };
 
   const handleAddPatient = () => {
-    setShowAddPatientModal(true);
+    // Navigate to patient addition screen
+    router.push('/caretaker/add-patient');
   };
 
-  const handleAddPatientSuccess = async () => {
-    setShowAddPatientModal(false);
-    // Refresh the dashboard data
-    await onRefresh();
+  const handleClearAllData = () => {
+    Alert.alert(
+      'Clear All Patient Data',
+      'This will permanently delete all patients and their data. This action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear All',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await clearAllData();
+              Alert.alert('Success', 'All patient data has been cleared.');
+            } catch (error) {
+              Alert.alert('Error', 'Failed to clear data. Please try again.');
+            }
+          },
+        },
+      ]
+    );
   };
 
   // Calculate stats
-  const totalPatients = managedUsers.length;
-  const criticalAlerts = alerts.filter(alert => alert.severity === 'CRITICAL' || alert.severity === 'HIGH').length;
-  const activePatients = managedUsers.filter(user => user.isActive).length;
+  const totalPatients = patients.length;
+  const connectedPatients = patients.filter(patient => patient.isConnected).length;
+  const activePatients = patients.filter(patient => {
+    const today = new Date().toISOString().split('T')[0];
+    const lastSync = patient.lastSync ? new Date(patient.lastSync) : null;
+    return lastSync && lastSync.toISOString().split('T')[0] === today;
+  }).length;
+
+  // Calculate average hydration for connected patients
+  const averageHydration = patients.length > 0 ? 
+    Math.round(
+      patients.reduce((sum, patient) => {
+        const todayIntakes = patient.todayIntakes || [];
+        const totalConsumed = todayIntakes.reduce((total, intake) => total + intake.amount, 0);
+        const progress = (totalConsumed / (patient.dailyGoal || 2000)) * 100;
+        return sum + Math.min(progress, 100);
+      }, 0) / patients.length
+    ) : 0;
 
   if (isLoading) {
     return (
@@ -139,10 +190,7 @@ export default function CaretakerDashboard() {
             <Text style={styles.greeting}>
               Welcome back, {caretaker.name} 👋
             </Text>
-            <Text style={styles.role}>{caretaker.role}</Text>
-            {caretaker.facilityName && (
-              <Text style={styles.facility}>{caretaker.facilityName}</Text>
-            )}
+            <Text style={styles.subtitle}>Caretaker Dashboard</Text>
           </View>
           <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut}>
             <View style={styles.signOutContent}>
@@ -173,160 +221,96 @@ export default function CaretakerDashboard() {
                 <Text style={styles.statLabel}>Total Patients</Text>
               </View>
               <View style={styles.statCard}>
+                <Text style={[styles.statNumber, { color: connectedPatients > 0 ? '#4CAF50' : '#F44336' }]}>
+                  {connectedPatients}
+                </Text>
+                <Text style={styles.statLabel}>Connected</Text>
+              </View>
+              <View style={styles.statCard}>
                 <Text style={styles.statNumber}>{activePatients}</Text>
                 <Text style={styles.statLabel}>Active Today</Text>
               </View>
-              <View style={[styles.statCard, criticalAlerts > 0 && styles.criticalCard]}>
-                <Text style={[styles.statNumber, criticalAlerts > 0 && styles.criticalText]}>
-                  {criticalAlerts}
+              <View style={styles.statCard}>
+                <Text style={[styles.statNumber, { 
+                  color: averageHydration >= 80 ? '#4CAF50' : averageHydration >= 50 ? '#FF9800' : '#F44336' 
+                }]}>
+                  {averageHydration}%
                 </Text>
-                <Text style={[styles.statLabel, criticalAlerts > 0 && styles.criticalText]}>
-                  Critical Alerts
-                </Text>
+                <Text style={styles.statLabel}>Avg Hydration</Text>
               </View>
             </View>
           </View>
 
-          {/* Active Alerts */}
-          {alerts.filter(alert => !alert.acknowledged).length > 0 && (
-            <View style={styles.alertsContainer}>
-              <Text style={styles.sectionTitle}>Active Alerts</Text>
-              {alerts.filter(alert => !alert.acknowledged).slice(0, 3).map(alert => (
-                <TouchableOpacity
-                  key={alert.id}
-                  style={[
-                    styles.alertItem,
-                    alert.severity === 'CRITICAL' && styles.criticalAlert,
-                    alert.severity === 'HIGH' && styles.highAlert
-                  ]}
-                  onPress={() => handleAlertPress(alert)}
-                >
-                  <View style={styles.alertContent}>
-                    <Text style={styles.alertTitle}>
-                      {alert.alertType.replace('_', ' ').toLowerCase().replace(/\b\w/g, l => l.toUpperCase())}
-                    </Text>
-                    <Text style={styles.alertMessage}>{alert.message}</Text>
-                    <Text style={styles.alertTime}>
-                      {alert.createdAt.toLocaleTimeString()}
-                    </Text>
-                  </View>
-                  <View style={[
-                    styles.severityBadge,
-                    alert.severity === 'CRITICAL' && styles.criticalBadge,
-                    alert.severity === 'HIGH' && styles.highBadge
-                  ]}>
-                    <Text style={styles.severityText}>{alert.severity}</Text>
-                  </View>
-                </TouchableOpacity>
-              ))}
-              {alerts.filter(alert => !alert.acknowledged).length > 3 && (
-                <TouchableOpacity style={styles.viewAllButton}>
-                  <Text style={styles.viewAllText}>
-                    View All Alerts ({alerts.filter(alert => !alert.acknowledged).length})
-                  </Text>
-                </TouchableOpacity>
-              )}
+          {/* Real-time Device Status */}
+          {connectedPatients > 0 && (
+            <View style={styles.deviceStatusContainer}>
+              <Text style={styles.sectionTitle}>🟢 Real-time Device Status</Text>
+              <View style={styles.deviceStatusCard}>
+                <Text style={styles.deviceStatusText}>
+                  {connectedPatients} device{connectedPatients !== 1 ? 's' : ''} connected and transmitting live data
+                </Text>
+                <Text style={styles.deviceStatusSubtext}>
+                  Water levels are updating automatically from connected IoT bottles
+                </Text>
+              </View>
             </View>
           )}
 
-          {/* Patients List */}
+          {/* Patients List with Real-time Data */}
           <View style={styles.patientsContainer}>
             <View style={styles.patientsHeader}>
-              <Text style={styles.sectionTitle}>Your Patients</Text>
-              <TouchableOpacity style={styles.addPatientHeaderButton} onPress={handleAddPatient}>
-                <Text style={styles.addPatientHeaderButtonText}>+ Add Patient</Text>
-              </TouchableOpacity>
-            </View>
-            {managedUsers.length === 0 ? (
-              <View style={styles.emptyState}>
-                <Text style={styles.emptyStateText}>No patients assigned yet</Text>
-                <Text style={styles.emptyStateSubtext}>
-                  Connect IoT devices to patients to start monitoring their hydration
-                </Text>
+              <Text style={styles.sectionTitle}>
+                Patient Monitoring ({patients.length})
+              </Text>
+              <View style={styles.headerButtons}>
+                {patients.length > 0 && (
+                  <TouchableOpacity style={styles.clearButton} onPress={handleClearAllData}>
+                    <Text style={styles.clearButtonText}>Clear All</Text>
+                  </TouchableOpacity>
+                )}
                 <TouchableOpacity style={styles.addPatientButton} onPress={handleAddPatient}>
-                  <Text style={styles.addPatientButtonText}>Add First Patient</Text>
+                  <Text style={styles.addPatientButtonText}>+ Add Patient</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {patients.length === 0 ? (
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyStateIcon}>👥</Text>
+                <Text style={styles.emptyStateText}>No patients added yet</Text>
+                <Text style={styles.emptyStateSubtext}>
+                  Add patients and connect their IoT devices to start monitoring hydration in real-time
+                </Text>
+                <TouchableOpacity style={styles.addFirstPatientButton} onPress={handleAddPatient}>
+                  <Text style={styles.addFirstPatientButtonText}>Add First Patient</Text>
                 </TouchableOpacity>
               </View>
             ) : (
-              managedUsers.map(patient => (
-                <PatientCard key={patient.id} patient={patient} />
-              ))
+              <View style={styles.patientsGrid}>
+                {patients.map(patient => (
+                  <PatientDeviceCard
+                    key={patient.id}
+                    patient={patient}
+                    onPatientPress={() => handlePatientPress(patient)}
+                    onUpdatePatient={handleUpdatePatient}
+                    onDeletePatient={() => handleDeletePatient(patient)}
+                  />
+                ))}
+              </View>
             )}
           </View>
 
-          
+          {/* Footer Info */}
+          <View style={styles.footer}>
+            <Text style={styles.footerText}>
+              💧 Real-time hydration monitoring • Last updated: {new Date().toLocaleTimeString()}
+            </Text>
+          </View>
         </ScrollView>
-
-        {/* Add Patient Modal */}
-        <AddPatientModal
-          visible={showAddPatientModal}
-          onClose={() => setShowAddPatientModal(false)}
-          onSuccess={handleAddPatientSuccess}
-        />
       </LinearGradient>
     </SafeAreaView>
   );
 }
-
-// Patient Card Component
-const PatientCard: React.FC<{ patient: PatientUser }> = ({ patient }) => {
-  const getHydrationStatus = () => {
-    // This would calculate based on today's consumption
-    // For now, returning mock data
-    const percentage = Math.floor(Math.random() * 100);
-    return {
-      percentage,
-      color: percentage >= 80 ? '#4CAF50' : percentage >= 50 ? '#FF9800' : '#F44336',
-      status: percentage >= 80 ? 'Good' : percentage >= 50 ? 'Fair' : 'Poor'
-    };
-  };
-
-  const hydration = getHydrationStatus();
-
-  const handlePatientPress = () => {
-    router.push(`/caretaker/patient/${patient.id}`);
-  };
-
-  return (
-    <TouchableOpacity style={styles.patientCard} onPress={handlePatientPress}>
-      <View style={styles.patientHeader}>
-        <View>
-          <Text style={styles.patientName}>{patient.name}</Text>
-          <Text style={styles.patientDetails}>
-            Age: {patient.age} {patient.roomNumber && `• Room: ${patient.roomNumber}`}
-          </Text>
-        </View>
-        <View style={styles.patientCardRight}>
-          <View style={[styles.statusDot, { backgroundColor: hydration.color }]} />
-          <Text style={styles.tapToView}>Tap to view details</Text>
-        </View>
-      </View>
-      
-      <View style={styles.hydrationBar}>
-        <View style={styles.hydrationLabel}>
-          <Text style={styles.hydrationText}>Hydration: {hydration.percentage}%</Text>
-          <Text style={[styles.hydrationStatus, { color: hydration.color }]}>
-            {hydration.status}
-          </Text>
-        </View>
-        <View style={styles.progressBarContainer}>
-          <View 
-            style={[
-              styles.progressBar, 
-              { width: `${hydration.percentage}%`, backgroundColor: hydration.color }
-            ]} 
-          />
-        </View>
-      </View>
-
-      {patient.lastSeen && (
-        <Text style={styles.lastSeen}>
-          Last active: {patient.lastSeen.toLocaleTimeString()}
-        </Text>
-      )}
-    </TouchableOpacity>
-  );
-};
 
 const styles = StyleSheet.create({
   container: {
@@ -365,16 +349,11 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: Colors.text.dark,
     marginBottom: 4,
-    flexWrap: 'wrap',
   },
-  role: {
+  subtitle: {
     fontSize: 14,
     color: Colors.primary,
     fontWeight: '600',
-  },
-  facility: {
-    fontSize: 12,
-    color: Colors.text.medium,
   },
   signOutButton: {
     paddingHorizontal: Spacing.sm,
@@ -388,8 +367,6 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 2,
     elevation: 2,
-    minWidth: 80,
-    maxWidth: 100,
   },
   signOutContent: {
     flexDirection: 'row',
@@ -435,98 +412,38 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 3,
   },
-  criticalCard: {
-    backgroundColor: '#FEE2E2',
-    borderColor: '#F87171',
-    borderWidth: 1,
-  },
   statNumber: {
-    fontSize: 28,
+    fontSize: 24,
     fontWeight: 'bold',
     color: Colors.primary,
     marginBottom: 4,
   },
-  criticalText: {
-    color: '#DC2626',
-  },
   statLabel: {
-    fontSize: 14,
+    fontSize: 12,
     color: Colors.text.medium,
     textAlign: 'center',
+    fontWeight: '500',
   },
-  alertsContainer: {
+  deviceStatusContainer: {
     paddingHorizontal: Spacing.lg,
     marginBottom: Spacing.xl,
   },
-  alertItem: {
-    flexDirection: 'row',
-    backgroundColor: 'white',
+  deviceStatusCard: {
+    backgroundColor: 'rgba(76, 175, 80, 0.1)',
     borderRadius: 12,
     padding: Spacing.md,
-    marginBottom: Spacing.sm,
     borderLeftWidth: 4,
-    borderLeftColor: Colors.accent,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    borderLeftColor: '#4CAF50',
   },
-  criticalAlert: {
-    borderLeftColor: '#DC2626',
-    backgroundColor: '#FEF2F2',
-  },
-  highAlert: {
-    borderLeftColor: '#F59E0B',
-    backgroundColor: '#FFFBEB',
-  },
-  alertContent: {
-    flex: 1,
-  },
-  alertTitle: {
+  deviceStatusText: {
     fontSize: 16,
     fontWeight: '600',
-    color: Colors.text.dark,
+    color: '#2E7D32',
     marginBottom: 4,
   },
-  alertMessage: {
+  deviceStatusSubtext: {
     fontSize: 14,
-    color: Colors.text.medium,
-    marginBottom: 4,
-  },
-  alertTime: {
-    fontSize: 12,
-    color: Colors.text.light,
-  },
-  severityBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-    backgroundColor: Colors.accent,
-    alignSelf: 'flex-start',
-  },
-  criticalBadge: {
-    backgroundColor: '#DC2626',
-  },
-  highBadge: {
-    backgroundColor: '#F59E0B',
-  },
-  severityText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: 'white',
-  },
-  viewAllButton: {
-    alignItems: 'center',
-    padding: Spacing.md,
-    backgroundColor: 'rgba(59, 130, 246, 0.1)',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: Colors.primary,
-  },
-  viewAllText: {
-    color: Colors.primary,
-    fontWeight: '600',
+    color: '#388E3C',
   },
   patientsContainer: {
     paddingHorizontal: Spacing.lg,
@@ -538,13 +455,28 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: Spacing.md,
   },
-  addPatientHeaderButton: {
+  headerButtons: {
+    flexDirection: 'row',
+    gap: Spacing.sm,
+  },
+  clearButton: {
+    backgroundColor: '#F44336',
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.xs,
+    borderRadius: 8,
+  },
+  clearButtonText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  addPatientButton: {
     backgroundColor: Colors.primary,
     paddingHorizontal: Spacing.md,
     paddingVertical: Spacing.xs,
     borderRadius: 8,
   },
-  addPatientHeaderButtonText: {
+  addPatientButtonText: {
     color: 'white',
     fontSize: 14,
     fontWeight: '600',
@@ -558,11 +490,16 @@ const styles = StyleSheet.create({
     borderColor: Colors.background.light,
     borderStyle: 'dashed',
   },
+  emptyStateIcon: {
+    fontSize: 48,
+    marginBottom: Spacing.md,
+  },
   emptyStateText: {
-    fontSize: 16,
+    fontSize: 18,
     color: Colors.text.medium,
     marginBottom: Spacing.xs,
     textAlign: 'center',
+    fontWeight: '600',
   },
   emptyStateSubtext: {
     fontSize: 14,
@@ -571,119 +508,28 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 20,
   },
-  addPatientButton: {
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.sm,
+  addFirstPatientButton: {
+    paddingHorizontal: Spacing.xl,
+    paddingVertical: Spacing.md,
     backgroundColor: Colors.primary,
-    borderRadius: 8,
+    borderRadius: 12,
   },
-  addPatientButtonText: {
+  addFirstPatientButtonText: {
     color: 'white',
     fontWeight: '600',
+    fontSize: 16,
   },
-  patientCard: {
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: Spacing.md,
-    marginBottom: Spacing.md,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+  patientsGrid: {
+    gap: Spacing.md,
   },
-  patientHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: Spacing.md,
-  },
-  patientCardRight: {
-    alignItems: 'flex-end',
-  },
-  patientName: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: Colors.text.dark,
-    marginBottom: 2,
-  },
-  patientDetails: {
-    fontSize: 14,
-    color: Colors.text.medium,
-  },
-  statusDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    marginBottom: 4,
-  },
-  tapToView: {
-    fontSize: 12,
-    color: Colors.text.light,
-    fontStyle: 'italic',
-  },
-  hydrationBar: {
-    marginBottom: Spacing.sm,
-  },
-  hydrationLabel: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 4,
-  },
-  hydrationText: {
-    fontSize: 14,
-    color: Colors.text.dark,
-    fontWeight: '500',
-  },
-  hydrationStatus: {
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  progressBarContainer: {
-    height: 6,
-    backgroundColor: '#E5E7EB',
-    borderRadius: 3,
-    overflow: 'hidden',
-  },
-  progressBar: {
-    height: '100%',
-    borderRadius: 3,
-  },
-  lastSeen: {
-    fontSize: 12,
-    color: Colors.text.light,
-  },
-  actionsContainer: {
+  footer: {
     paddingHorizontal: Spacing.lg,
-    marginBottom: Spacing.xl,
-  },
-  actionsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-  },
-  actionCard: {
-    width: '48%',
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: Spacing.md,
+    paddingVertical: Spacing.lg,
     alignItems: 'center',
-    marginBottom: Spacing.md,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
   },
-  actionIcon: {
-    fontSize: 24,
-    marginBottom: Spacing.sm,
-  },
-  actionTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: Colors.text.dark,
+  footerText: {
+    fontSize: 12,
+    color: Colors.text.light,
     textAlign: 'center',
   },
 });
